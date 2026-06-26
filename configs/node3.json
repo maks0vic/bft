@@ -1,0 +1,12 @@
+{
+  "id": "node3",
+  "address": "localhost:8003",
+  "leader": false,
+  "byzantine": false,
+  "behavior": "",
+  "peers": [
+    { "id": "node1", "address": "localhost:8001", "byzantine": false },
+    { "id": "node2", "address": "localhost:8002", "byzantine": false },
+    { "id": "node4", "address": "localhost:8004", "byzantine": true }
+  ]
+}
