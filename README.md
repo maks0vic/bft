@@ -18,6 +18,49 @@ The system simulates:
 The main question the simulator answers is:
 
 > Can honest nodes still agree on the same value when one node behaves maliciously?
+> 
+>
+## How To Start Everything
+
+### 1. Start backend stack
+
+From the project root:
+
+```bash
+cd /Users/smaksovic/GolandProjects/bft
+go run ./cmd/launcher
+```
+
+Expected behavior:
+
+- nodes start on ports `8001`-`8004`
+- coordinator starts on port `9000`
+- launcher stays running and waits for frontend/coordinator actions
+
+### 2. Start frontend
+
+In another terminal:
+
+```bash
+cd /Users/smaksovic/GolandProjects/bft/frontend
+npm install
+npm run dev
+```
+
+Open:
+
+[`http://localhost:5173`](http://localhost:5173)
+
+### 3. Use the UI
+
+The dashboard provides:
+
+- `Start`
+- `Reset`
+- proposal value input
+- node graph
+- event log
+- summary bar
 
 ## Architecture
 
@@ -215,48 +258,6 @@ Example:
 ```bash
 go run ./cmd/client -leader localhost:8001 -value attack
 ```
-
-## How To Start Everything
-
-### 1. Start backend stack
-
-From the project root:
-
-```bash
-cd /Users/smaksovic/GolandProjects/bft
-go run ./cmd/launcher
-```
-
-Expected behavior:
-
-- nodes start on ports `8001`-`8004`
-- coordinator starts on port `9000`
-- launcher stays running and waits for frontend/coordinator actions
-
-### 2. Start frontend
-
-In another terminal:
-
-```bash
-cd /Users/smaksovic/GolandProjects/bft/frontend
-npm install
-npm run dev
-```
-
-Open:
-
-[`http://localhost:5173`](http://localhost:5173)
-
-### 3. Use the UI
-
-The dashboard provides:
-
-- `Start`
-- `Reset`
-- proposal value input
-- node graph
-- event log
-- summary bar
 
 ## Ports
 
