@@ -73,6 +73,11 @@ func Digest(value string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+func signatureForMessage(msg model.Message) string {
+	base := fmt.Sprintf("%s|%s|%d|%d|%s|%s|%d", msg.From, msg.Type, msg.View, msg.Sequence, msg.Value, msg.Digest, msg.PreparedView)
+	return Digest(base)
+}
+
 func (n *Node) quorum() int {
 	totalNodes := len(n.Config.Peers) + 1
 	f := (totalNodes - 1) / 3
@@ -119,6 +124,16 @@ func (n *Node) storeEvidenceLocked(evidence map[string]map[string]model.Message,
 	}
 	evidence[key][msg.From] = msg
 	return len(evidence[key])
+}
+
+func (n *Node) hasEvidenceFromLocked(evidence map[string]map[string]model.Message, msg model.Message) bool {
+	key := evidenceBucketKey(msg.View, msg.Sequence, msg.Digest)
+	bucket := evidence[key]
+	if bucket == nil {
+		return false
+	}
+	_, exists := bucket[msg.From]
+	return exists
 }
 
 func (n *Node) matchingPrepareCountLocked() int {
@@ -440,6 +455,18 @@ func (n *Node) isByzantinePeer(id string) bool {
 	for _, peer := range n.Config.Peers {
 		if peer.ID == id {
 			return peer.Byzantine
+		}
+	}
+	return false
+}
+
+func (n *Node) isKnownSenderLocked(id string) bool {
+	if id == n.Config.ID {
+		return true
+	}
+	for _, peer := range n.Config.Peers {
+		if peer.ID == id {
+			return true
 		}
 	}
 	return false

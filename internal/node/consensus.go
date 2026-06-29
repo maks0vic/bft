@@ -34,6 +34,7 @@ func (n *Node) StartConsensus(value string) {
 		Value:    value,
 		Digest:   Digest(value),
 	}
+	msg.Signature = signatureForMessage(msg)
 	n.appendEventLocked(model.EventConsensusStarted, &msg, "", "leader_start", false)
 	n.mu.Unlock()
 
@@ -72,6 +73,10 @@ func (n *Node) handlePrePrepare(msg model.Message) {
 		return
 	}
 	if !n.validatePrePrepareLeaderLocked(msg) {
+		n.mu.Unlock()
+		return
+	}
+	if !n.validateAuthenticatedSenderLocked(msg) {
 		n.mu.Unlock()
 		return
 	}
@@ -117,6 +122,7 @@ func (n *Node) handlePrePrepare(msg model.Message) {
 		Value:    prepareValue,
 		Digest:   Digest(prepareValue),
 	}
+	prepare.Signature = signatureForMessage(prepare)
 	matchCount := n.storeEvidenceLocked(n.PrepareEvidence, prepare)
 	shouldCommit := false
 	var commit model.Message
@@ -146,6 +152,7 @@ func (n *Node) handlePrePrepare(msg model.Message) {
 			Value:    commitValue,
 			Digest:   Digest(commitValue),
 		}
+		commit.Signature = signatureForMessage(commit)
 		n.storeEvidenceLocked(n.CommitEvidence, commit)
 		shouldCommit = true
 	}
@@ -171,9 +178,19 @@ func (n *Node) handlePrepare(msg model.Message) {
 		n.mu.Unlock()
 		return
 	}
+	if !n.validateAuthenticatedSenderLocked(msg) {
+		n.mu.Unlock()
+		return
+	}
 	if n.DecidedProposal != nil && n.DecidedProposal.Digest != msg.Digest {
 		n.recordRejectLocked("decision already fixed")
 		n.appendEventLocked(model.EventRejected, &msg, "", "decision already fixed", false)
+		n.mu.Unlock()
+		return
+	}
+	if n.hasEvidenceFromLocked(n.PrepareEvidence, msg) {
+		n.recordRejectLocked("duplicate prepare sender")
+		n.appendEventLocked(model.EventRejected, &msg, "", "duplicate prepare sender", false)
 		n.mu.Unlock()
 		return
 	}
@@ -231,6 +248,7 @@ func (n *Node) handlePrepare(msg model.Message) {
 		Value:    commitValue,
 		Digest:   Digest(commitValue),
 	}
+	commit.Signature = signatureForMessage(commit)
 	n.storeEvidenceLocked(n.CommitEvidence, commit)
 	n.mu.Unlock()
 
@@ -250,9 +268,19 @@ func (n *Node) handleCommit(msg model.Message) {
 		n.mu.Unlock()
 		return
 	}
+	if !n.validateAuthenticatedSenderLocked(msg) {
+		n.mu.Unlock()
+		return
+	}
 	if n.DecidedProposal != nil && n.DecidedProposal.Digest != msg.Digest {
 		n.recordRejectLocked("decision already fixed")
 		n.appendEventLocked(model.EventRejected, &msg, "", "decision already fixed", false)
+		n.mu.Unlock()
+		return
+	}
+	if n.hasEvidenceFromLocked(n.CommitEvidence, msg) {
+		n.recordRejectLocked("duplicate commit sender")
+		n.appendEventLocked(model.EventRejected, &msg, "", "duplicate commit sender", false)
 		n.mu.Unlock()
 		return
 	}
@@ -329,6 +357,7 @@ func (n *Node) InitiateViewChange(targetView int, trigger string) {
 		viewChange.Value = n.PreparedProposal.Value
 		viewChange.Digest = n.PreparedProposal.Digest
 	}
+	viewChange.Signature = signatureForMessage(viewChange)
 	if n.ViewChangeEvidence[targetView] == nil {
 		n.ViewChangeEvidence[targetView] = make(map[string]model.Message)
 	}
@@ -350,6 +379,10 @@ func (n *Node) handleViewChange(msg model.Message) {
 		n.mu.Unlock()
 		return
 	}
+	if !n.validateAuthenticatedSenderLocked(msg) {
+		n.mu.Unlock()
+		return
+	}
 	if msg.View > n.ViewChangeTarget {
 		n.ViewChangeTarget = msg.View
 		n.consensusStart = true
@@ -359,6 +392,12 @@ func (n *Node) handleViewChange(msg model.Message) {
 	}
 	if n.ViewChangeEvidence[msg.View] == nil {
 		n.ViewChangeEvidence[msg.View] = make(map[string]model.Message)
+	}
+	if _, exists := n.ViewChangeEvidence[msg.View][msg.From]; exists {
+		n.recordRejectLocked("duplicate view change sender")
+		n.appendEventLocked(model.EventRejected, &msg, "", "duplicate view change sender", false)
+		n.mu.Unlock()
+		return
 	}
 	n.ViewChangeEvidence[msg.View][msg.From] = msg
 
@@ -380,6 +419,7 @@ func (n *Node) handleViewChange(msg model.Message) {
 	if value != "" {
 		newView.Digest = Digest(value)
 	}
+	newView.Signature = signatureForMessage(newView)
 	n.NewViewSent[msg.View] = true
 	n.mu.Unlock()
 
@@ -396,6 +436,10 @@ func (n *Node) handleNewView(msg model.Message) {
 		return
 	}
 	if !n.validateNewViewLocked(msg) {
+		n.mu.Unlock()
+		return
+	}
+	if !n.validateAuthenticatedSenderLocked(msg) {
 		n.mu.Unlock()
 		return
 	}
@@ -416,6 +460,7 @@ func (n *Node) handleNewView(msg model.Message) {
 		Value:    msg.Value,
 		Digest:   msg.Digest,
 	}
+	prePrepare.Signature = signatureForMessage(prePrepare)
 	n.ProcessMessage(prePrepare)
 }
 
@@ -440,6 +485,22 @@ func (n *Node) validateBasicLocked(msg model.Message) bool {
 		n.recordRejectLocked("digest mismatch")
 		n.appendEventLocked(model.EventRejected, &msg, "", "digest mismatch", false)
 		log.Printf("[%s] rejected %s from %s due to digest mismatch", n.Config.ID, msg.Type, msg.From)
+		return false
+	}
+	return true
+}
+
+func (n *Node) validateAuthenticatedSenderLocked(msg model.Message) bool {
+	if !n.isKnownSenderLocked(msg.From) {
+		n.recordRejectLocked("unknown sender")
+		n.appendEventLocked(model.EventRejected, &msg, "", "unknown sender", false)
+		log.Printf("[%s] rejected %s from %s due to unknown sender", n.Config.ID, msg.Type, msg.From)
+		return false
+	}
+	if msg.Signature != signatureForMessage(msg) {
+		n.recordRejectLocked("invalid signature")
+		n.appendEventLocked(model.EventRejected, &msg, "", "invalid signature", false)
+		log.Printf("[%s] rejected %s from %s due to invalid signature", n.Config.ID, msg.Type, msg.From)
 		return false
 	}
 	return true

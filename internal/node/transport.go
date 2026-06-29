@@ -39,6 +39,8 @@ func (n *Node) BroadcastPossiblyConflicting(msg model.Message) {
 }
 
 func (n *Node) SendToPeer(peer model.Peer, msg model.Message, byzantineAction bool, details string) {
+	msg.Signature = signatureForMessage(msg)
+
 	n.mu.Lock()
 	n.appendEventLocked(model.EventMessageSent, &msg, peer.ID, details, n.Config.Byzantine)
 	if byzantineAction {
