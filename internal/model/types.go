@@ -105,7 +105,10 @@ type ResetResponse struct {
 }
 
 type StartRequest struct {
-	Value string `json:"value"`
+	Value             string `json:"value"`
+	NodeCount         int    `json:"nodeCount"`
+	ByzantineCount    int    `json:"byzantineCount"`
+	ByzantineBehavior string `json:"byzantineBehavior"`
 }
 
 type NodeView struct {

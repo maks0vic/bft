@@ -2,6 +2,13 @@ import type { EventsResponse, SimulationState } from "./types";
 
 const API_BASE = "/api";
 
+export type StartSimulationInput = {
+  value: string;
+  nodeCount: number;
+  byzantineCount: number;
+  byzantineBehavior: string;
+};
+
 export async function fetchState(): Promise<SimulationState> {
   const response = await fetch(`${API_BASE}/state`);
   if (!response.ok) {
@@ -22,14 +29,15 @@ export async function fetchEvents(since: number): Promise<EventsResponse> {
   return response.json();
 }
 
-export async function startSimulation(value: string): Promise<void> {
+export async function startSimulation(input: StartSimulationInput): Promise<void> {
   const response = await fetch(`${API_BASE}/start`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ value }),
+    body: JSON.stringify(input),
   });
   if (!response.ok) {
-    throw new Error(`Failed to start simulation: ${response.status}`);
+    const detail = await response.text();
+    throw new Error(detail || `Failed to start simulation: ${response.status}`);
   }
 }
 

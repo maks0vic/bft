@@ -12,41 +12,27 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"path/filepath"
-	"sort"
 	"syscall"
 	"time"
 
-	"bft/internal/config"
 	"bft/internal/model"
 )
 
 var launcherHTTPClient = &http.Client{Timeout: 2 * time.Second}
 
 func main() {
-	configDir := flag.String("config-dir", "configs", "directory with node configs")
 	coordinatorAddr := flag.String("coordinator-addr", "localhost:9000", "coordinator listen address")
+	nodeBasePort := flag.Int("node-base-port", 8001, "starting port for generated node processes")
 	flag.Parse()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	nodes, err := loadConfigItems(*configDir)
-	if err != nil {
-		log.Fatalf("load configs: %v", err)
-	}
-
 	processCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	var procs []*exec.Cmd
-	for _, item := range nodes {
-		cmd := exec.CommandContext(processCtx, "go", "run", "./cmd/node", "-config", item.Path)
-		cmd.Dir = repoRoot()
-		startCmd(item.Config.ID, cmd, &procs)
-	}
-
-	coordinatorCmd := exec.CommandContext(processCtx, "go", "run", "./cmd/coordinator", "-config-dir", *configDir, "-addr", *coordinatorAddr)
+	coordinatorCmd := exec.CommandContext(processCtx, "go", "run", "./cmd/coordinator", "-addr", *coordinatorAddr, "-node-base-port", fmt.Sprintf("%d", *nodeBasePort))
 	coordinatorCmd.Dir = repoRoot()
 	startCmd("coordinator", coordinatorCmd, &procs)
 
@@ -54,7 +40,7 @@ func main() {
 		cancel()
 		for _, cmd := range procs {
 			if cmd.Process != nil {
-				_ = cmd.Process.Kill()
+				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 			}
 			_ = cmd.Wait()
 		}
@@ -75,34 +61,8 @@ func main() {
 	<-ctx.Done()
 }
 
-type configItem struct {
-	Path   string
-	Config model.NodeConfig
-}
-
-func loadConfigItems(dir string) ([]configItem, error) {
-	pattern := filepath.Join(dir, "*.json")
-	paths, err := filepath.Glob(pattern)
-	if err != nil {
-		return nil, err
-	}
-	sort.Strings(paths)
-	if len(paths) == 0 {
-		return nil, fmt.Errorf("no config files found in %s", dir)
-	}
-
-	items := make([]configItem, 0, len(paths))
-	for _, path := range paths {
-		cfg, err := config.Load(path)
-		if err != nil {
-			return nil, fmt.Errorf("load %s: %w", path, err)
-		}
-		items = append(items, configItem{Path: path, Config: cfg})
-	}
-	return items, nil
-}
-
 func startCmd(prefix string, cmd *exec.Cmd, procs *[]*exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		log.Fatalf("stdout pipe for %s: %v", prefix, err)

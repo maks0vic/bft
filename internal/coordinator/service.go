@@ -2,50 +2,58 @@ package coordinator
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"sync"
+	"syscall"
 	"time"
 
+	"bft/internal/config"
 	"bft/internal/model"
 )
+
+type activeRun struct {
+	configs []model.NodeConfig
+	procs   []*exec.Cmd
+	tempDir string
+}
 
 type Service struct {
 	mu sync.Mutex
 
 	simulationID string
-	nodeConfigs  []model.NodeConfig
 	httpClient   *http.Client
+	repoRoot     string
+	nodeBasePort int
+	processCtx   context.Context
 
 	eventIndex      map[string]int64
 	canonicalEvents []model.CanonicalEvent
 	globalSequence  int64
+	run             *activeRun
 }
 
-func New(nodeConfigs []model.NodeConfig) *Service {
-	configs := append([]model.NodeConfig(nil), nodeConfigs...)
-	sort.Slice(configs, func(i, j int) bool {
-		return configs[i].ID < configs[j].ID
-	})
+func New(repoRoot string, nodeBasePort int, processCtx context.Context) *Service {
+	if processCtx == nil {
+		processCtx = context.Background()
+	}
 
 	return &Service{
 		simulationID: nextSimulationID(),
-		nodeConfigs:  configs,
 		httpClient:   &http.Client{Timeout: 2 * time.Second},
+		repoRoot:     repoRoot,
+		nodeBasePort: nodeBasePort,
+		processCtx:   processCtx,
 		eventIndex:   make(map[string]int64),
 	}
-}
-
-func (s *Service) Leader() (model.NodeConfig, bool) {
-	for _, cfg := range s.nodeConfigs {
-		if cfg.Leader {
-			return cfg, true
-		}
-	}
-	return model.NodeConfig{}, false
 }
 
 func (s *Service) HandleState(w http.ResponseWriter, r *http.Request) {
@@ -111,42 +119,61 @@ func (s *Service) HandleStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	leader, ok := s.Leader()
-	if !ok {
-		http.Error(w, "no leader configured", http.StatusInternalServerError)
-		return
-	}
-
 	var req model.StartRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if req.Value == "" {
-		http.Error(w, "value is required", http.StatusBadRequest)
+
+	cluster, err := config.BuildRuntimeCluster(req, s.nodeBasePort)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	if err := s.resetAll(); err != nil {
+	if err := s.stopActiveRun(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	s.resetCoordinatorState()
+
+	run, err := s.startRun(cluster.Nodes)
+	if err != nil {
+		_ = s.cleanupRun(run)
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	s.setRun(run)
+
+	leader, ok := leaderOf(run.configs)
+	if !ok {
+		_ = s.stopActiveRun()
+		http.Error(w, "no leader configured", http.StatusInternalServerError)
 		return
 	}
 
 	body, err := json.Marshal(req)
 	if err != nil {
+		_ = s.stopActiveRun()
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	resp, err := s.httpClient.Post("http://"+leader.Address+"/start", "application/json", bytes.NewBuffer(body))
 	if err != nil {
+		_ = s.stopActiveRun()
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		_ = s.stopActiveRun()
+		http.Error(w, fmt.Sprintf("leader start failed: %s", resp.Status), http.StatusBadGateway)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(resp.StatusCode)
+	w.WriteHeader(http.StatusAccepted)
 	_ = json.NewEncoder(w).Encode(model.ResetResponse{Status: "started"})
 }
 
@@ -156,18 +183,40 @@ func (s *Service) HandleReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.resetAll(); err != nil {
+	if err := s.stopActiveRun(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
+	s.resetCoordinatorState()
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(model.ResetResponse{Status: "reset"})
 }
 
+func (s *Service) Close() error {
+	return s.stopActiveRun()
+}
+
+func (s *Service) currentConfigs() []model.NodeConfig {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.run == nil {
+		return nil
+	}
+
+	configs := append([]model.NodeConfig(nil), s.run.configs...)
+	return configs
+}
+
 func (s *Service) fetchStates() ([]model.StateResponse, error) {
-	states := make([]model.StateResponse, 0, len(s.nodeConfigs))
-	for _, cfg := range s.nodeConfigs {
+	configs := s.currentConfigs()
+	if len(configs) == 0 {
+		return []model.StateResponse{}, nil
+	}
+
+	states := make([]model.StateResponse, 0, len(configs))
+	for _, cfg := range configs {
 		resp, err := s.httpClient.Get("http://" + cfg.Address + "/state")
 		if err != nil {
 			return nil, err
@@ -189,8 +238,13 @@ func (s *Service) fetchStates() ([]model.StateResponse, error) {
 }
 
 func (s *Service) fetchEvents() (map[string][]model.NodeEvent, error) {
-	eventsByNode := make(map[string][]model.NodeEvent, len(s.nodeConfigs))
-	for _, cfg := range s.nodeConfigs {
+	configs := s.currentConfigs()
+	if len(configs) == 0 {
+		return map[string][]model.NodeEvent{}, nil
+	}
+
+	eventsByNode := make(map[string][]model.NodeEvent, len(configs))
+	for _, cfg := range configs {
 		resp, err := s.httpClient.Get("http://" + cfg.Address + "/events")
 		if err != nil {
 			return nil, err
@@ -260,7 +314,7 @@ func (s *Service) buildSimulationState(states []model.StateResponse) model.Simul
 
 	nodes := make([]model.NodeView, 0, len(states))
 	finalValue := ""
-	consensusReached := true
+	consensusReached := len(states) > 0
 	running := false
 	view := 0
 	sequence := 0
@@ -322,30 +376,214 @@ func (s *Service) buildSimulationState(states []model.StateResponse) model.Simul
 	}
 }
 
-func (s *Service) resetAll() error {
-	for _, cfg := range s.nodeConfigs {
-		req, err := http.NewRequest(http.MethodPost, "http://"+cfg.Address+"/reset", nil)
-		if err != nil {
-			return err
+func (s *Service) startRun(configs []model.NodeConfig) (*activeRun, error) {
+	tempDir, err := os.MkdirTemp("", "bft-runtime-*")
+	if err != nil {
+		return nil, err
+	}
+
+	run := &activeRun{
+		configs: append([]model.NodeConfig(nil), configs...),
+		tempDir: tempDir,
+	}
+
+	for _, cfg := range configs {
+		if err := waitForPortReleased(cfg.Address, 2*time.Second); err != nil {
+			return run, err
 		}
-		resp, err := s.httpClient.Do(req)
-		if err != nil {
-			return err
+
+		path := filepath.Join(tempDir, fmt.Sprintf("%s.json", cfg.ID))
+		if err := writeConfig(path, cfg); err != nil {
+			return run, err
 		}
-		_ = resp.Body.Close()
-		if resp.StatusCode >= 300 {
-			return fmt.Errorf("unexpected reset status from %s: %s", cfg.Address, resp.Status)
+
+		cmd := exec.CommandContext(s.processCtx, "go", "run", "./cmd/node", "-config", path)
+		cmd.Dir = s.repoRoot
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		if err := cmd.Start(); err != nil {
+			return run, err
+		}
+		run.procs = append(run.procs, cmd)
+	}
+
+	if err := s.waitForNodes(run.configs, 8*time.Second); err != nil {
+		return run, err
+	}
+
+	return run, nil
+}
+
+func (s *Service) waitForNodes(configs []model.NodeConfig, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		ready := true
+		for _, cfg := range configs {
+			resp, err := s.httpClient.Get("http://" + cfg.Address + "/state")
+			if err != nil {
+				ready = false
+				break
+			}
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				ready = false
+				break
+			}
+		}
+		if ready {
+			return nil
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	return fmt.Errorf("node readiness timeout after %s", timeout)
+}
+
+func (s *Service) stopActiveRun() error {
+	s.mu.Lock()
+	run := s.run
+	s.run = nil
+	s.mu.Unlock()
+
+	if run == nil {
+		return nil
+	}
+
+	return s.cleanupRun(run)
+}
+
+func (s *Service) cleanupRun(run *activeRun) error {
+	var firstErr error
+	for _, cmd := range run.procs {
+		if cmd == nil || cmd.Process == nil {
+			continue
+		}
+		if err := signalProcessGroup(cmd, syscall.SIGTERM); err != nil && !isFinishedProcessError(err) {
+			firstErr = pickErr(firstErr, err)
 		}
 	}
 
+	for i, cmd := range run.procs {
+		if cmd == nil {
+			continue
+		}
+		address := ""
+		if i < len(run.configs) {
+			address = run.configs[i].Address
+		}
+		if err := waitCmdExit(cmd, 2*time.Second); err != nil {
+			if killErr := signalProcessGroup(cmd, syscall.SIGKILL); killErr != nil && !isFinishedProcessError(killErr) {
+				firstErr = pickErr(firstErr, killErr)
+			}
+			if killErr := waitCmdExit(cmd, 2*time.Second); killErr != nil {
+				firstErr = pickErr(firstErr, killErr)
+			}
+		}
+		if address != "" {
+			if err := waitForPortReleased(address, 2*time.Second); err != nil {
+				firstErr = pickErr(firstErr, err)
+			}
+		}
+	}
+
+	if run.tempDir != "" {
+		if err := os.RemoveAll(run.tempDir); err != nil {
+			firstErr = pickErr(firstErr, err)
+		}
+	}
+
+	return firstErr
+}
+
+func (s *Service) resetCoordinatorState() {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	s.eventIndex = make(map[string]int64)
 	s.canonicalEvents = nil
 	s.globalSequence = 0
 	s.simulationID = nextSimulationID()
-	s.mu.Unlock()
+}
 
-	return nil
+func (s *Service) setRun(run *activeRun) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.run = run
+}
+
+func leaderOf(configs []model.NodeConfig) (model.NodeConfig, bool) {
+	for _, cfg := range configs {
+		if cfg.Leader {
+			return cfg, true
+		}
+	}
+	return model.NodeConfig{}, false
+}
+
+func writeConfig(path string, cfg model.NodeConfig) error {
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o600)
+}
+
+func waitCmdExit(cmd *exec.Cmd, timeout time.Duration) error {
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil && !isFinishedProcessError(err) {
+			return err
+		}
+		return nil
+	case <-time.After(timeout):
+		return fmt.Errorf("process exit timeout after %s", timeout)
+	}
+}
+
+func signalProcessGroup(cmd *exec.Cmd, sig syscall.Signal) error {
+	if cmd == nil || cmd.Process == nil {
+		return nil
+	}
+	return syscall.Kill(-cmd.Process.Pid, sig)
+}
+
+func waitForPortReleased(address string, timeout time.Duration) error {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return err
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, port), 200*time.Millisecond)
+		if err != nil {
+			return nil
+		}
+		_ = conn.Close()
+		time.Sleep(150 * time.Millisecond)
+	}
+	return fmt.Errorf("port %s was not released within %s", address, timeout)
+}
+
+func isFinishedProcessError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if _, ok := err.(*exec.ExitError); ok {
+		return true
+	}
+	return err.Error() == "os: process already finished" || err.Error() == "waitid: no child processes"
+}
+
+func pickErr(current error, next error) error {
+	if current != nil {
+		return current
+	}
+	return next
 }
 
 func nextSimulationID() string {
