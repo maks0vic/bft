@@ -1,6 +1,7 @@
 package node
 
 import (
+	"fmt"
 	"log"
 
 	"bft/internal/model"
@@ -64,7 +65,7 @@ func (n *Node) handlePrePrepare(msg model.Message) {
 		n.mu.Unlock()
 		return
 	}
-	if existing := n.PrePrepare; existing != nil && (existing.View != msg.View || existing.Sequence != msg.Sequence || existing.Digest != msg.Digest) {
+	if existing := n.AcceptedCertificate; existing != nil && (existing.Message.View != msg.View || existing.Message.Sequence != msg.Sequence || existing.Message.Digest != msg.Digest) {
 		n.recordRejectLocked("conflicting pre-prepare")
 		n.appendEventLocked(model.EventRejected, &msg, "", "conflicting pre-prepare", false)
 		n.mu.Unlock()
@@ -72,7 +73,7 @@ func (n *Node) handlePrePrepare(msg model.Message) {
 		return
 	}
 
-	n.PrePrepare = &msg
+	n.AcceptedCertificate = &acceptedProposalCertificate{Message: msg}
 	n.consensusStart = true
 	n.State.ProposedValue = msg.Value
 
@@ -92,10 +93,11 @@ func (n *Node) handlePrePrepare(msg model.Message) {
 	matchCount := n.storeEvidenceLocked(n.PrepareEvidence, prepare)
 	shouldCommit := false
 	var commit model.Message
-	if !n.State.Prepared && matchCount >= n.quorum() {
-		n.State.Prepared = true
-		n.appendEventLocked(model.EventQuorumReached, &prepare, "", "prepare quorum reached", false)
-		n.appendEventLocked(model.EventNodePrepared, &prepare, "", "node prepared", false)
+	if n.PreparedCertificate == nil && n.AcceptedCertificate != nil && matchCount >= n.quorum() {
+		n.PreparedCertificate = n.buildQuorumCertificateLocked(n.PrepareEvidence, prepare.View, prepare.Sequence, prepare.Digest)
+		n.State.Prepared = n.PreparedCertificate != nil
+		n.appendEventLocked(model.EventQuorumReached, &prepare, "", fmt.Sprintf("prepare quorum reached certificate digest=%s quorum=%d", prepare.Digest, matchCount), false)
+		n.appendEventLocked(model.EventNodePrepared, &prepare, "", fmt.Sprintf("prepared certificate formed digest=%s quorum=%d", prepare.Digest, matchCount), false)
 		commitValue := n.State.ProposedValue
 		if n.Config.Byzantine && n.Config.Behavior == model.BehaviorConflictingValue {
 			commitValue = n.State.ProposedValue + "_tampered"
@@ -149,14 +151,15 @@ func (n *Node) handlePrepare(msg model.Message) {
 	}
 
 	matchCount := n.storeEvidenceLocked(n.PrepareEvidence, msg)
-	if n.State.Prepared || matchCount < n.quorum() {
+	if n.PreparedCertificate != nil || matchCount < n.quorum() || n.AcceptedCertificate == nil {
 		n.mu.Unlock()
 		return
 	}
 
-	n.State.Prepared = true
-	n.appendEventLocked(model.EventQuorumReached, &msg, "", "prepare quorum reached", false)
-	n.appendEventLocked(model.EventNodePrepared, &msg, "", "node prepared", false)
+	n.PreparedCertificate = n.buildQuorumCertificateLocked(n.PrepareEvidence, msg.View, msg.Sequence, msg.Digest)
+	n.State.Prepared = n.PreparedCertificate != nil
+	n.appendEventLocked(model.EventQuorumReached, &msg, "", fmt.Sprintf("prepare quorum reached certificate digest=%s quorum=%d", msg.Digest, matchCount), false)
+	n.appendEventLocked(model.EventNodePrepared, &msg, "", fmt.Sprintf("prepared certificate formed digest=%s quorum=%d", msg.Digest, matchCount), false)
 
 	commitValue := n.State.ProposedValue
 	if n.Config.Byzantine && n.Config.Behavior == model.BehaviorConflictingValue {
@@ -206,14 +209,23 @@ func (n *Node) handleCommit(msg model.Message) {
 	}
 
 	matchCount := n.storeEvidenceLocked(n.CommitEvidence, msg)
-	if n.State.Decided || matchCount < n.quorum() {
+	if n.State.Decided || matchCount < n.quorum() || n.PreparedCertificate == nil {
+		if n.PreparedCertificate == nil {
+			n.appendEventLocked(model.EventBuffered, &msg, "", "waiting_for_prepared_certificate", false)
+		}
+		n.mu.Unlock()
+		return
+	}
+
+	n.CommittedCertificate = n.buildQuorumCertificateLocked(n.CommitEvidence, msg.View, msg.Sequence, msg.Digest)
+	if n.CommittedCertificate == nil {
 		n.mu.Unlock()
 		return
 	}
 
 	n.State.Committed = true
-	n.appendEventLocked(model.EventNodeCommitted, &msg, "", "node committed", false)
-	n.appendEventLocked(model.EventQuorumReached, &msg, "", "commit quorum reached", false)
+	n.appendEventLocked(model.EventNodeCommitted, &msg, "", fmt.Sprintf("committed certificate formed digest=%s quorum=%d", msg.Digest, matchCount), false)
+	n.appendEventLocked(model.EventQuorumReached, &msg, "", fmt.Sprintf("commit quorum reached certificate digest=%s quorum=%d", msg.Digest, matchCount), false)
 	n.State.Decided = true
 	n.State.Decision = n.State.ProposedValue
 	n.consensusStart = false

@@ -11,13 +11,26 @@ import (
 	"bft/internal/model"
 )
 
+type acceptedProposalCertificate struct {
+	Message model.Message
+}
+
+type quorumCertificate struct {
+	Message    model.Message
+	Senders    []string
+	QuorumSize int
+}
+
 type Node struct {
 	Config model.NodeConfig
 
 	mu sync.Mutex
 
-	State      model.ConsensusState
-	PrePrepare *model.Message
+	State model.ConsensusState
+
+	AcceptedCertificate  *acceptedProposalCertificate
+	PreparedCertificate  *quorumCertificate
+	CommittedCertificate *quorumCertificate
 
 	PrepareEvidence map[string]map[string]model.Message
 	CommitEvidence  map[string]map[string]model.Message
@@ -51,8 +64,8 @@ func evidenceBucketKey(view int, sequence int, digest string) string {
 }
 
 func (n *Node) candidateDigestLocked() string {
-	if n.PrePrepare != nil {
-		return n.PrePrepare.Digest
+	if n.AcceptedCertificate != nil {
+		return n.AcceptedCertificate.Message.Digest
 	}
 	if n.State.ProposedValue == "" {
 		return ""
@@ -83,6 +96,27 @@ func (n *Node) matchingPrepareCountLocked() int {
 
 func (n *Node) matchingCommitCountLocked() int {
 	return n.evidenceCountLocked(n.CommitEvidence, n.State.View, n.State.Sequence, n.candidateDigestLocked())
+}
+
+func (n *Node) buildQuorumCertificateLocked(evidence map[string]map[string]model.Message, view int, sequence int, digest string) *quorumCertificate {
+	key := evidenceBucketKey(view, sequence, digest)
+	bucket := evidence[key]
+	if len(bucket) < n.quorum() {
+		return nil
+	}
+
+	senders := make([]string, 0, len(bucket))
+	for sender := range bucket {
+		senders = append(senders, sender)
+	}
+	sort.Strings(senders)
+
+	message := bucket[senders[0]]
+	return &quorumCertificate{
+		Message:    message,
+		Senders:    senders,
+		QuorumSize: len(senders),
+	}
 }
 
 func (n *Node) recordRejectLocked(reason string) {
@@ -126,7 +160,10 @@ func (n *Node) phaseLocked() string {
 }
 
 func (n *Node) outgoingValueLocked() string {
-	acceptedValue := n.State.ProposedValue
+	acceptedValue := ""
+	if n.AcceptedCertificate != nil {
+		acceptedValue = n.AcceptedCertificate.Message.Value
+	}
 	if acceptedValue == "" {
 		return ""
 	}
@@ -146,6 +183,11 @@ func (n *Node) outgoingValueLocked() string {
 }
 
 func (n *Node) stateResponseLocked() model.StateResponse {
+	acceptedValue := ""
+	if n.AcceptedCertificate != nil {
+		acceptedValue = n.AcceptedCertificate.Message.Value
+	}
+
 	return model.StateResponse{
 		ID:             n.Config.ID,
 		Leader:         n.Config.Leader,
@@ -153,7 +195,7 @@ func (n *Node) stateResponseLocked() model.StateResponse {
 		Behavior:       n.Config.Behavior,
 		Running:        n.consensusStart && !n.State.Decided,
 		Phase:          n.phaseLocked(),
-		AcceptedValue:  n.State.ProposedValue,
+		AcceptedValue:  acceptedValue,
 		OutgoingValue:  n.outgoingValueLocked(),
 		State:          n.State,
 		PrepareMatches: n.matchingPrepareCountLocked(),
@@ -188,7 +230,9 @@ func (n *Node) resetLocked() {
 		View:     0,
 		Sequence: 1,
 	}
-	n.PrePrepare = nil
+	n.AcceptedCertificate = nil
+	n.PreparedCertificate = nil
+	n.CommittedCertificate = nil
 	n.PrepareEvidence = make(map[string]map[string]model.Message)
 	n.CommitEvidence = make(map[string]map[string]model.Message)
 	n.RejectCount = 0
