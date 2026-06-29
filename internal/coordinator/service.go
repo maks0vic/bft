@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sort"
 	"strconv"
 	"sync"
@@ -40,6 +41,8 @@ type Service struct {
 	globalSequence  int64
 	run             *activeRun
 }
+
+const reclaimPortWindow = 64
 
 func New(repoRoot string, nodeBasePort int, processCtx context.Context) *Service {
 	if processCtx == nil {
@@ -135,6 +138,10 @@ func (s *Service) HandleStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
+	if err := s.reclaimNodePortWindow(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
 	s.resetCoordinatorState()
 
 	run, err := s.startRun(cluster.Nodes)
@@ -187,6 +194,10 @@ func (s *Service) HandleReset(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
+	if err := s.reclaimNodePortWindow(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
 	s.resetCoordinatorState()
 
 	w.Header().Set("Content-Type", "application/json")
@@ -194,7 +205,10 @@ func (s *Service) HandleReset(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) Close() error {
-	return s.stopActiveRun()
+	if err := s.stopActiveRun(); err != nil {
+		return err
+	}
+	return s.reclaimNodePortWindow()
 }
 
 func (s *Service) currentConfigs() []model.NodeConfig {
@@ -550,6 +564,69 @@ func signalProcessGroup(cmd *exec.Cmd, sig syscall.Signal) error {
 		return nil
 	}
 	return syscall.Kill(-cmd.Process.Pid, sig)
+}
+
+func (s *Service) reclaimNodePortWindow() error {
+	var firstErr error
+	for port := s.nodeBasePort; port < s.nodeBasePort+reclaimPortWindow; port++ {
+		if err := reclaimNodeListenerOnPort(port); err != nil {
+			firstErr = pickErr(firstErr, err)
+		}
+	}
+	return firstErr
+}
+
+func reclaimNodeListenerOnPort(port int) error {
+	cmd := exec.Command("lsof", "-nP", fmt.Sprintf("-iTCP:%d", port), "-sTCP:LISTEN", "-Fpc")
+	output, err := cmd.Output()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if ok := errorAs(err, &exitErr); ok && exitErr.ExitCode() == 1 {
+			return nil
+		}
+		return err
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	currentPID := 0
+	currentCmd := ""
+	for _, line := range lines {
+		if len(line) < 2 {
+			continue
+		}
+		switch line[0] {
+		case 'p':
+			pid, parseErr := strconv.Atoi(line[1:])
+			if parseErr != nil {
+				currentPID = 0
+				continue
+			}
+			currentPID = pid
+		case 'c':
+			currentCmd = line[1:]
+			if currentPID != 0 && currentCmd == "node" {
+				if err := syscall.Kill(currentPID, syscall.SIGKILL); err != nil && err != syscall.ESRCH {
+					return err
+				}
+			}
+		}
+	}
+
+	address := fmt.Sprintf("localhost:%d", port)
+	return waitForPortReleased(address, 2*time.Second)
+}
+
+func errorAs(err error, target interface{}) bool {
+	switch v := target.(type) {
+	case **exec.ExitError:
+		exitErr, ok := err.(*exec.ExitError)
+		if ok {
+			*v = exitErr
+		}
+		return ok
+	default:
+		return false
+	}
 }
 
 func waitForPortReleased(address string, timeout time.Duration) error {
