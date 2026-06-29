@@ -8,6 +8,8 @@ const (
 	MsgPrePrepare MessageType = "PRE_PREPARE"
 	MsgPrepare    MessageType = "PREPARE"
 	MsgCommit     MessageType = "COMMIT"
+	MsgViewChange MessageType = "VIEW_CHANGE"
+	MsgNewView    MessageType = "NEW_VIEW"
 )
 
 type EventKind string
@@ -33,13 +35,14 @@ const (
 )
 
 type Message struct {
-	Type      MessageType `json:"type"`
-	View      int         `json:"view"`
-	Sequence  int         `json:"sequence"`
-	From      string      `json:"from"`
-	Value     string      `json:"value"`
-	Digest    string      `json:"digest"`
-	Signature string      `json:"signature,omitempty"`
+	Type         MessageType `json:"type"`
+	View         int         `json:"view"`
+	Sequence     int         `json:"sequence"`
+	From         string      `json:"from"`
+	Value        string      `json:"value"`
+	Digest       string      `json:"digest"`
+	PreparedView int         `json:"preparedView,omitempty"`
+	Signature    string      `json:"signature,omitempty"`
 }
 
 type Peer struct {

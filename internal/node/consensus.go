@@ -23,6 +23,7 @@ func (n *Node) StartConsensus(value string) {
 		log.Printf("[%s] consensus already started", n.Config.ID)
 		return
 	}
+	n.requestedValue = value
 	n.beginRoundLocked()
 
 	msg := model.Message{
@@ -49,6 +50,10 @@ func (n *Node) ProcessMessage(msg model.Message) {
 		n.handlePrepare(msg)
 	case model.MsgCommit:
 		n.handleCommit(msg)
+	case model.MsgViewChange:
+		n.handleViewChange(msg)
+	case model.MsgNewView:
+		n.handleNewView(msg)
 	default:
 		n.mu.Lock()
 		n.recordRejectLocked("unknown message type")
@@ -270,6 +275,120 @@ func (n *Node) handleCommit(msg model.Message) {
 	log.Printf("[%s] DECIDED value=%s with %d matching COMMIT messages", n.Config.ID, decision, matchCount)
 }
 
+func (n *Node) InitiateViewChange(targetView int, trigger string) {
+	n.mu.Lock()
+	if n.State.Decided || targetView <= n.State.View || targetView <= n.ViewChangeTarget {
+		n.mu.Unlock()
+		return
+	}
+
+	n.ViewChangeTarget = targetView
+	n.State.TimedOut = false
+	n.State.TimeoutReason = ""
+	n.consensusStart = true
+	n.scheduleProgressTimeoutLocked("waiting_for_new_view")
+
+	viewChange := model.Message{
+		Type:         model.MsgViewChange,
+		View:         targetView,
+		Sequence:     n.State.Sequence,
+		From:         n.Config.ID,
+		PreparedView: n.currentPreparedViewLocked(),
+	}
+	if n.PreparedProposal != nil {
+		viewChange.Value = n.PreparedProposal.Value
+		viewChange.Digest = n.PreparedProposal.Digest
+	}
+	if n.ViewChangeEvidence[targetView] == nil {
+		n.ViewChangeEvidence[targetView] = make(map[string]model.Message)
+	}
+	n.ViewChangeEvidence[targetView][n.Config.ID] = viewChange
+	n.mu.Unlock()
+
+	log.Printf("[%s] starting view change to view=%d trigger=%s", n.Config.ID, targetView, trigger)
+	n.Broadcast(viewChange)
+}
+
+func (n *Node) handleViewChange(msg model.Message) {
+	n.mu.Lock()
+	if n.shouldStaySilentLocked() {
+		n.appendEventLocked(model.EventByzantineAction, &msg, "", "silent_byzantine", true)
+		n.mu.Unlock()
+		return
+	}
+	if !n.validateViewChangeLocked(msg) {
+		n.mu.Unlock()
+		return
+	}
+	if msg.View > n.ViewChangeTarget {
+		n.ViewChangeTarget = msg.View
+		n.consensusStart = true
+		n.State.TimedOut = false
+		n.State.TimeoutReason = ""
+		n.scheduleProgressTimeoutLocked("waiting_for_new_view")
+	}
+	if n.ViewChangeEvidence[msg.View] == nil {
+		n.ViewChangeEvidence[msg.View] = make(map[string]model.Message)
+	}
+	n.ViewChangeEvidence[msg.View][msg.From] = msg
+
+	expectedLeader := n.expectedLeaderIDLocked(msg.View)
+	if n.Config.ID != expectedLeader || n.NewViewSent[msg.View] || len(n.ViewChangeEvidence[msg.View]) < n.quorum() {
+		n.mu.Unlock()
+		return
+	}
+
+	value, preparedView := n.newViewValueLocked()
+	newView := model.Message{
+		Type:         model.MsgNewView,
+		View:         msg.View,
+		Sequence:     n.State.Sequence,
+		From:         n.Config.ID,
+		Value:        value,
+		PreparedView: preparedView,
+	}
+	if value != "" {
+		newView.Digest = Digest(value)
+	}
+	n.NewViewSent[msg.View] = true
+	n.mu.Unlock()
+
+	log.Printf("[%s] broadcasting NEW_VIEW for view=%d value=%s", n.Config.ID, msg.View, value)
+	n.Broadcast(newView)
+	n.ProcessMessage(newView)
+}
+
+func (n *Node) handleNewView(msg model.Message) {
+	n.mu.Lock()
+	if n.shouldStaySilentLocked() {
+		n.appendEventLocked(model.EventByzantineAction, &msg, "", "silent_byzantine", true)
+		n.mu.Unlock()
+		return
+	}
+	if !n.validateNewViewLocked(msg) {
+		n.mu.Unlock()
+		return
+	}
+
+	n.advanceToViewLocked(msg.View)
+	n.scheduleProposalTimeoutLocked()
+	n.mu.Unlock()
+
+	if msg.Value == "" {
+		return
+	}
+
+	prePrepare := model.Message{
+		Type:     model.MsgPrePrepare,
+		View:     msg.View,
+		Sequence: msg.Sequence,
+		From:     msg.From,
+		Value:    msg.Value,
+		Digest:   msg.Digest,
+	}
+	n.ProcessMessage(prePrepare)
+}
+
 func (n *Node) shouldStaySilentLocked() bool {
 	return n.Config.Byzantine && n.Config.Behavior == model.BehaviorSilent
 }
@@ -302,6 +421,54 @@ func (n *Node) validatePrePrepareLeaderLocked(msg model.Message) bool {
 		n.recordRejectLocked("unexpected leader")
 		n.appendEventLocked(model.EventRejected, &msg, "", "unexpected leader", false)
 		log.Printf("[%s] rejected %s from %s due to unexpected leader, expected %s", n.Config.ID, msg.Type, msg.From, expectedLeader)
+		return false
+	}
+	return true
+}
+
+func (n *Node) validateViewChangeLocked(msg model.Message) bool {
+	if msg.View <= n.State.View {
+		n.recordRejectLocked("stale view change")
+		n.appendEventLocked(model.EventRejected, &msg, "", "stale view change", false)
+		return false
+	}
+	if msg.Sequence != n.State.Sequence {
+		n.recordRejectLocked("unexpected sequence")
+		n.appendEventLocked(model.EventRejected, &msg, "", "unexpected sequence", false)
+		return false
+	}
+	if msg.Value == "" && msg.Digest != "" {
+		n.recordRejectLocked("view change digest mismatch")
+		n.appendEventLocked(model.EventRejected, &msg, "", "view change digest mismatch", false)
+		return false
+	}
+	if msg.Value != "" && msg.Digest != Digest(msg.Value) {
+		n.recordRejectLocked("view change digest mismatch")
+		n.appendEventLocked(model.EventRejected, &msg, "", "view change digest mismatch", false)
+		return false
+	}
+	return true
+}
+
+func (n *Node) validateNewViewLocked(msg model.Message) bool {
+	if msg.View <= n.State.View {
+		n.recordRejectLocked("stale new view")
+		n.appendEventLocked(model.EventRejected, &msg, "", "stale new view", false)
+		return false
+	}
+	if msg.Sequence != n.State.Sequence {
+		n.recordRejectLocked("unexpected sequence")
+		n.appendEventLocked(model.EventRejected, &msg, "", "unexpected sequence", false)
+		return false
+	}
+	if msg.From != n.expectedLeaderIDLocked(msg.View) {
+		n.recordRejectLocked("unexpected new view leader")
+		n.appendEventLocked(model.EventRejected, &msg, "", "unexpected new view leader", false)
+		return false
+	}
+	if msg.Value != "" && msg.Digest != Digest(msg.Value) {
+		n.recordRejectLocked("new view digest mismatch")
+		n.appendEventLocked(model.EventRejected, &msg, "", "new view digest mismatch", false)
 		return false
 	}
 	return true

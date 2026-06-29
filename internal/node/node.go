@@ -46,6 +46,10 @@ type Node struct {
 	CandidateProposal    *proposalState
 	PreparedProposal     *proposalState
 	DecidedProposal      *proposalState
+	ViewChangeEvidence   map[int]map[string]model.Message
+	NewViewSent          map[int]bool
+	ViewChangeTarget     int
+	requestedValue       string
 
 	PrepareEvidence map[string]map[string]model.Message
 	CommitEvidence  map[string]map[string]model.Message
@@ -179,6 +183,8 @@ func (n *Node) phaseLocked() string {
 	switch {
 	case n.State.Decided:
 		return "decided"
+	case n.ViewChangeTarget > n.State.View:
+		return "view_change"
 	case n.State.TimedOut:
 		return "timed_out"
 	case n.State.Committed:
@@ -196,13 +202,15 @@ func (n *Node) beginRoundLocked() {
 	n.consensusStart = true
 	n.State.TimedOut = false
 	n.State.TimeoutReason = ""
+	n.ViewChangeTarget = n.State.View
 	n.timeoutEpoch++
 }
 
-func (n *Node) PrimeConsensusRound() {
+func (n *Node) PrimeConsensusRound(value string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
+	n.requestedValue = value
 	n.beginRoundLocked()
 	n.scheduleProposalTimeoutLocked()
 }
@@ -221,6 +229,7 @@ func (n *Node) notePreparedLocked() {
 
 func (n *Node) finishConsensusLocked() {
 	n.consensusStart = false
+	n.ViewChangeTarget = n.State.View
 	n.timeoutEpoch++
 }
 
@@ -250,6 +259,8 @@ func (n *Node) scheduleProgressTimeoutLocked(reason string) {
 			return n.PreparedCertificate == nil
 		case "waiting_for_commit_quorum":
 			return n.PreparedCertificate != nil && n.CommittedCertificate == nil
+		case "waiting_for_new_view":
+			return n.ViewChangeTarget > n.State.View
 		default:
 			return false
 		}
@@ -270,6 +281,60 @@ func (n *Node) fireTimeoutAfter(delay time.Duration, epoch int64, view int, sequ
 	n.State.TimedOut = true
 	n.State.TimeoutReason = reason
 	n.appendEventLocked(model.EventTimeout, nil, "", reason, n.Config.Byzantine)
+	nextView := n.State.View + 1
+	if n.ViewChangeTarget > nextView {
+		nextView = n.ViewChangeTarget + 1
+	}
+	go n.InitiateViewChange(nextView, reason)
+}
+
+func (n *Node) advanceToViewLocked(view int) {
+	n.State.View = view
+	n.State.ProposedValue = ""
+	n.State.Prepared = false
+	n.State.Committed = false
+	n.State.Decided = false
+	n.State.Decision = ""
+	n.State.TimedOut = false
+	n.State.TimeoutReason = ""
+	n.AcceptedCertificate = nil
+	n.PreparedCertificate = nil
+	n.CommittedCertificate = nil
+	n.CandidateProposal = nil
+	n.PreparedProposal = nil
+	n.DecidedProposal = nil
+	n.PrepareEvidence = make(map[string]map[string]model.Message)
+	n.CommitEvidence = make(map[string]map[string]model.Message)
+	n.consensusStart = true
+	n.ViewChangeTarget = view
+	n.timeoutEpoch++
+}
+
+func (n *Node) currentPreparedViewLocked() int {
+	if n.PreparedProposal != nil {
+		return n.PreparedProposal.View
+	}
+	return 0
+}
+
+func (n *Node) newViewValueLocked() (string, int) {
+	target := n.ViewChangeTarget
+	if target == 0 {
+		target = n.State.View + 1
+	}
+	bestView := -1
+	bestValue := ""
+	for _, msg := range n.ViewChangeEvidence[target] {
+		if msg.Value == "" || msg.PreparedView < bestView {
+			continue
+		}
+		bestView = msg.PreparedView
+		bestValue = msg.Value
+	}
+	if bestValue != "" {
+		return bestValue, bestView
+	}
+	return n.requestedValue, 0
 }
 
 func (n *Node) outgoingValueLocked() string {
@@ -350,6 +415,10 @@ func (n *Node) resetLocked() {
 	n.CandidateProposal = nil
 	n.PreparedProposal = nil
 	n.DecidedProposal = nil
+	n.ViewChangeEvidence = make(map[int]map[string]model.Message)
+	n.NewViewSent = make(map[int]bool)
+	n.ViewChangeTarget = 0
+	n.requestedValue = ""
 	n.PrepareEvidence = make(map[string]map[string]model.Message)
 	n.CommitEvidence = make(map[string]map[string]model.Message)
 	n.RejectCount = 0

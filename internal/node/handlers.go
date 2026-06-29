@@ -21,13 +21,6 @@ func (n *Node) handleStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !n.Config.Leader {
-		n.PrimeConsensusRound()
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusAccepted)
-		_ = json.NewEncoder(w).Encode(model.ResetResponse{Status: "armed"})
-		return
-	}
 
 	var req model.StartRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -36,6 +29,14 @@ func (n *Node) handleStart(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Value == "" {
 		http.Error(w, "value is required", http.StatusBadRequest)
+		return
+	}
+
+	if !n.Config.Leader {
+		n.PrimeConsensusRound(req.Value)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(model.ResetResponse{Status: "armed"})
 		return
 	}
 
