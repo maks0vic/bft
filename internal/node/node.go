@@ -105,6 +105,26 @@ func (n *Node) phaseLocked() string {
 	}
 }
 
+func (n *Node) outgoingValueLocked() string {
+	acceptedValue := n.State.ProposedValue
+	if acceptedValue == "" {
+		return ""
+	}
+
+	if !n.Config.Byzantine {
+		return acceptedValue
+	}
+
+	switch n.Config.Behavior {
+	case model.BehaviorSilent:
+		return ""
+	case model.BehaviorConflictingValue:
+		return acceptedValue + "_tampered"
+	default:
+		return acceptedValue
+	}
+}
+
 func (n *Node) stateResponseLocked() model.StateResponse {
 	return model.StateResponse{
 		ID:             n.Config.ID,
@@ -113,6 +133,8 @@ func (n *Node) stateResponseLocked() model.StateResponse {
 		Behavior:       n.Config.Behavior,
 		Running:        n.consensusStart && !n.State.Decided,
 		Phase:          n.phaseLocked(),
+		AcceptedValue:  n.State.ProposedValue,
+		OutgoingValue:  n.outgoingValueLocked(),
 		State:          n.State,
 		PrepareMatches: n.matchingPrepareCountLocked(),
 		CommitMatches:  n.matchingCommitCountLocked(),

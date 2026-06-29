@@ -1,4 +1,0 @@
-./consensus.go
-./handlers.go
-./node.go
-./transport.go

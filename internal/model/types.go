@@ -73,6 +73,8 @@ type StateResponse struct {
 	Behavior       string         `json:"behavior"`
 	Running        bool           `json:"running"`
 	Phase          string         `json:"phase"`
+	AcceptedValue  string         `json:"acceptedValue"`
+	OutgoingValue  string         `json:"outgoingValue"`
 	State          ConsensusState `json:"state"`
 	PrepareMatches int            `json:"prepare_matches"`
 	CommitMatches  int            `json:"commit_matches"`
@@ -112,7 +114,8 @@ type NodeView struct {
 	Byzantine     bool   `json:"byzantine"`
 	Behavior      string `json:"behavior"`
 	Phase         string `json:"phase"`
-	ProposedValue string `json:"proposedValue"`
+	AcceptedValue string `json:"acceptedValue"`
+	OutgoingValue string `json:"outgoingValue"`
 	Decision      string `json:"decision"`
 	PrepareCount  int    `json:"prepareCount"`
 	CommitCount   int    `json:"commitCount"`

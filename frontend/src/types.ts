@@ -16,7 +16,8 @@ export type NodeView = {
   byzantine: boolean;
   behavior: string;
   phase: string;
-  proposedValue: string;
+  acceptedValue: string;
+  outgoingValue: string;
   decision: string;
   prepareCount: number;
   commitCount: number;

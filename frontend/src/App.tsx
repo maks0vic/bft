@@ -1,8 +1,7 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { resetSimulation, startSimulation } from "./api";
 import { ControlPanel } from "./components/ControlPanel";
 import { EventLog } from "./components/EventLog";
-import { NetworkGraph } from "./components/NetworkGraph";
 import { NodeCard } from "./components/NodeCard";
 import { SummaryBar } from "./components/SummaryBar";
 import { useEventPoll } from "./hooks/useEventPoll";
@@ -16,8 +15,6 @@ export default function App() {
 
   const { state, error: stateError } = useStatePoll(refreshKey);
   const { events, error: eventError, setEvents, setEventsByNode, setLastSequence } = useEventPoll(refreshKey);
-
-  const recentEvents = useMemo(() => events.slice(-8), [events]);
 
   async function handleStart() {
     setBusy(true);
@@ -52,13 +49,13 @@ export default function App() {
   }
 
   return (
-    <main className="min-h-screen bg-[radial-gradient(circle_at_top,_#f8fbf9,_#e7efe9_45%,_#dbe6df)] px-4 py-6 text-ink md:px-8">
+    <main className="min-h-screen bg-[radial-gradient(circle_at_top,_#f7f2e8,_#e8eee8_38%,_#d7e0db)] px-4 py-6 text-ink md:px-8">
       <div className="mx-auto max-w-7xl space-y-6">
-        <header className="space-y-2">
-          <p className="text-sm font-semibold uppercase tracking-[0.26em] text-accent">Byzantine Fault Tolerant Consensus</p>
-          <h1 className="text-4xl font-semibold tracking-tight">Coordinator Dashboard</h1>
-          <p className="max-w-3xl text-slate-600">
-            Watch a 4-node PBFT-inspired simulation, inspect each node’s state, and follow the event stream that drives the graph.
+        <header className="rounded-[2rem] bg-[linear-gradient(135deg,_rgba(16,33,43,0.96),_rgba(18,67,78,0.88))] px-6 py-8 text-white shadow-[0_24px_80px_rgba(16,33,43,0.2)] md:px-8">
+          <p className="text-sm font-semibold uppercase tracking-[0.3em] text-emerald-200">Byzantine Fault Tolerant Consensus</p>
+          <h1 className="mt-3 text-4xl font-semibold tracking-tight md:text-5xl">Mission Board</h1>
+          <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-200 md:text-base">
+            Follow one fixed cluster view as the coordinator tracks proposal flow, quorum formation, Byzantine interference, and the final decision of each node.
           </p>
         </header>
 
@@ -71,20 +68,22 @@ export default function App() {
           </div>
         )}
 
-        <div className="grid gap-6 xl:grid-cols-[1.3fr_0.7fr]">
-          <NetworkGraph key={state?.simulationId ?? "idle"} state={state} recentEvents={recentEvents} />
-          <EventLog events={events} />
-        </div>
-
-        <section>
-          <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-ink">Node States</h2>
-            <span className="text-sm text-slate-500">{state?.nodes.length ?? 0} nodes</span>
+        <section className="rounded-[2rem] border border-white/60 bg-white/75 p-5 shadow-[0_18px_50px_rgba(15,23,42,0.08)] backdrop-blur">
+          <div className="mb-5 flex items-center justify-between">
+            <div>
+              <h2 className="text-2xl font-semibold text-ink">Cluster Nodes</h2>
+              <p className="mt-1 text-sm text-slate-500">Static board view of the current consensus round.</p>
+            </div>
+            <span className="rounded-full bg-slate-100 px-4 py-2 text-sm font-medium text-slate-600">
+              {state?.nodes.length ?? 0} nodes
+            </span>
           </div>
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <div className="grid gap-4 md:grid-cols-2">
             {state?.nodes.map((node) => <NodeCard key={node.id} node={node} />)}
           </div>
         </section>
+
+        <EventLog events={events} />
       </div>
     </main>
   );
