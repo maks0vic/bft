@@ -9,7 +9,10 @@ export type EventKind =
   | "BYZANTINE_ACTION"
   | "MESSAGE_REJECTED"
   | "MESSAGE_BUFFERED"
-  | "TIMEOUT";
+  | "TIMEOUT"
+  | "VIEW_CHANGE_SENT"
+  | "NEW_VIEW_SENT"
+  | "LEADER_REJECTED";
 
 export type NodeView = {
   id: string;
@@ -17,9 +20,11 @@ export type NodeView = {
   byzantine: boolean;
   behavior: string;
   phase: string;
+  currentLeader: string;
   acceptedValue: string;
   outgoingValue: string;
   decision: string;
+  timeoutReason: string;
   prepareCount: number;
   commitCount: number;
 };
@@ -30,6 +35,8 @@ export type SimulationState = {
   consensusReached: boolean;
   finalValue: string;
   running: boolean;
+  stalled: boolean;
+  currentLeaderId: string;
   view: number;
   sequence: number;
   nodes: NodeView[];

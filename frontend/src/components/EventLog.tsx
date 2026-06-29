@@ -17,7 +17,15 @@ export function EventLog({ events }: { events: CanonicalEvent[] }) {
           events.slice().reverse().map((event) => (
             <div
               key={event.id}
-              className={`rounded-3xl border p-4 text-sm ${event.malicious ? "border-warn/30 bg-rose-50" : "border-slate-200 bg-slate-50/90"}`}
+              className={`rounded-3xl border p-4 text-sm ${
+                event.malicious
+                  ? "border-warn/30 bg-rose-50"
+                  : event.kind === "TIMEOUT" || event.kind === "VIEW_CHANGE_SENT" || event.kind === "NEW_VIEW_SENT"
+                    ? "border-amber-200 bg-amber-50/80"
+                    : event.kind === "LEADER_REJECTED"
+                      ? "border-sky-200 bg-sky-50/80"
+                      : "border-slate-200 bg-slate-50/90"
+              }`}
             >
               <div className="flex items-start justify-between gap-4">
                 <div>

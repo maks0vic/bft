@@ -365,6 +365,7 @@ func (n *Node) InitiateViewChange(targetView int, trigger string) {
 		n.ViewChangeEvidence[targetView] = make(map[string]model.Message)
 	}
 	n.ViewChangeEvidence[targetView][n.Config.ID] = viewChange
+	n.appendEventLocked(model.EventViewChangeSent, &viewChange, "", "trigger="+trigger, n.Config.Byzantine)
 	n.mu.Unlock()
 
 	log.Printf("[%s] starting view change to view=%d trigger=%s", n.Config.ID, targetView, trigger)
@@ -427,6 +428,7 @@ func (n *Node) handleViewChange(msg model.Message) {
 	}
 	newView.Signature = signatureForMessage(newView)
 	n.NewViewSent[msg.View] = true
+	n.appendEventLocked(model.EventNewViewSent, &newView, "", fmt.Sprintf("preparedView=%d", preparedView), n.Config.Byzantine)
 	n.mu.Unlock()
 
 	log.Printf("[%s] broadcasting NEW_VIEW for view=%d value=%s", n.Config.ID, msg.View, value)
@@ -516,7 +518,7 @@ func (n *Node) validatePrePrepareLeaderLocked(msg model.Message) bool {
 	expectedLeader := n.expectedLeaderIDLocked(n.State.View)
 	if msg.From != expectedLeader {
 		n.recordRejectLocked("unexpected leader")
-		n.appendEventLocked(model.EventRejected, &msg, "", "unexpected leader", false)
+		n.appendEventLocked(model.EventLeaderRejected, &msg, "", "unexpected leader", false)
 		log.Printf("[%s] rejected %s from %s due to unexpected leader, expected %s", n.Config.ID, msg.Type, msg.From, expectedLeader)
 		return false
 	}

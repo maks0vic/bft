@@ -6,14 +6,16 @@ type Props = {
 
 export function SummaryBar({ state }: Props) {
   return (
-    <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+    <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
       <Metric label="Simulation" value={state?.simulationId ?? "loading"} tone="neutral" />
       <Metric
         label="Status"
-        value={state ? (state.running ? "Running" : state.consensusReached ? "Consensus reached" : "Idle") : "..."}
-        tone={state?.running ? "info" : state?.consensusReached ? "success" : "neutral"}
+        value={state ? (state.stalled ? "Stalled" : state.running ? "Running" : state.consensusReached ? "Consensus reached" : "Idle") : "..."}
+        tone={state?.stalled ? "warn" : state?.running ? "info" : state?.consensusReached ? "success" : "neutral"}
       />
       <Metric label="Final Value" value={state?.finalValue || "n/a"} tone={state?.finalValue ? "success" : "neutral"} />
+      <Metric label="Leader" value={state?.currentLeaderId || "n/a"} tone="neutral" />
+      <Metric label="View" value={state ? String(state.view) : "..."} tone="info" />
       <Metric label="Quorum" value={state ? String(state.quorum) : "..."} tone="warn" />
     </section>
   );

@@ -393,6 +393,7 @@ func (n *Node) stateResponseLocked() model.StateResponse {
 		Behavior:       n.Config.Behavior,
 		Running:        n.consensusStart && !n.State.Decided,
 		Phase:          n.phaseLocked(),
+		CurrentLeader:  n.expectedLeaderIDLocked(n.State.View),
 		AcceptedValue:  acceptedValue,
 		OutgoingValue:  n.outgoingValueLocked(),
 		State:          n.State,

@@ -26,6 +26,9 @@ const (
 	EventRejected         EventKind = "MESSAGE_REJECTED"
 	EventBuffered         EventKind = "MESSAGE_BUFFERED"
 	EventTimeout          EventKind = "TIMEOUT"
+	EventViewChangeSent   EventKind = "VIEW_CHANGE_SENT"
+	EventNewViewSent      EventKind = "NEW_VIEW_SENT"
+	EventLeaderRejected   EventKind = "LEADER_REJECTED"
 	EventReset            EventKind = "SIMULATION_RESET"
 )
 
@@ -83,6 +86,7 @@ type StateResponse struct {
 	Behavior       string         `json:"behavior"`
 	Running        bool           `json:"running"`
 	Phase          string         `json:"phase"`
+	CurrentLeader  string         `json:"currentLeader"`
 	AcceptedValue  string         `json:"acceptedValue"`
 	OutgoingValue  string         `json:"outgoingValue"`
 	State          ConsensusState `json:"state"`
@@ -127,9 +131,11 @@ type NodeView struct {
 	Byzantine     bool   `json:"byzantine"`
 	Behavior      string `json:"behavior"`
 	Phase         string `json:"phase"`
+	CurrentLeader string `json:"currentLeader"`
 	AcceptedValue string `json:"acceptedValue"`
 	OutgoingValue string `json:"outgoingValue"`
 	Decision      string `json:"decision"`
+	TimeoutReason string `json:"timeoutReason"`
 	PrepareCount  int    `json:"prepareCount"`
 	CommitCount   int    `json:"commitCount"`
 }
@@ -140,6 +146,8 @@ type SimulationState struct {
 	ConsensusReached bool       `json:"consensusReached"`
 	FinalValue       string     `json:"finalValue"`
 	Running          bool       `json:"running"`
+	Stalled          bool       `json:"stalled"`
+	CurrentLeaderID  string     `json:"currentLeaderId"`
 	View             int        `json:"view"`
 	Sequence         int        `json:"sequence"`
 	Nodes            []NodeView `json:"nodes"`

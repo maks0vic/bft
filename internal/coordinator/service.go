@@ -10,9 +10,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -348,8 +348,10 @@ func (s *Service) buildSimulationState(states []model.StateResponse) model.Simul
 	finalValue := ""
 	consensusReached := len(states) > 0
 	running := false
+	stalled := false
 	view := 0
 	sequence := 0
+	currentLeaderID := ""
 
 	for _, state := range states {
 		nodes = append(nodes, model.NodeView{
@@ -358,17 +360,26 @@ func (s *Service) buildSimulationState(states []model.StateResponse) model.Simul
 			Byzantine:     state.Byzantine,
 			Behavior:      state.Behavior,
 			Phase:         state.Phase,
+			CurrentLeader: state.CurrentLeader,
 			AcceptedValue: state.AcceptedValue,
 			OutgoingValue: state.OutgoingValue,
 			Decision:      state.State.Decision,
+			TimeoutReason: state.State.TimeoutReason,
 			PrepareCount:  state.PrepareMatches,
 			CommitCount:   state.CommitMatches,
 		})
 		if state.Running {
 			running = true
 		}
+		if state.State.TimedOut {
+			stalled = true
+		}
 		if state.State.View > view {
 			view = state.State.View
+			currentLeaderID = state.CurrentLeader
+		}
+		if currentLeaderID == "" {
+			currentLeaderID = state.CurrentLeader
 		}
 		if state.State.Sequence > sequence {
 			sequence = state.State.Sequence
@@ -402,6 +413,8 @@ func (s *Service) buildSimulationState(states []model.StateResponse) model.Simul
 		ConsensusReached: consensusReached,
 		FinalValue:       finalValue,
 		Running:          running,
+		Stalled:          stalled,
+		CurrentLeaderID:  currentLeaderID,
 		View:             view,
 		Sequence:         sequence,
 		Nodes:            nodes,

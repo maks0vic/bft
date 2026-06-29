@@ -54,6 +54,10 @@ export function ControlPanel({
           >
             <option value="conflicting_value">conflicting_value</option>
             <option value="silent">silent</option>
+            <option value="invalid_leader_proposal">invalid_leader_proposal</option>
+            <option value="stale_view_spam">stale_view_spam</option>
+            <option value="malformed_certificate">malformed_certificate</option>
+            <option value="equivocating_view_change">equivocating_view_change</option>
           </select>
         </div>
         <div className="flex gap-3 xl:justify-end">

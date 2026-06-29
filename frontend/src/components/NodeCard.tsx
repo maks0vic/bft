@@ -39,6 +39,8 @@ export function NodeCard({ node }: { node: NodeView }) {
       <div className="mt-5 grid grid-cols-2 gap-3 text-sm text-slate-600">
         <Field label="Prepare Count" value={String(node.prepareCount)} />
         <Field label="Commit Count" value={String(node.commitCount)} />
+        <Field label="Current Leader" value={node.currentLeader || "n/a"} />
+        <Field label="Timeout Reason" value={node.timeoutReason || "none"} />
       </div>
 
       <div className="mt-5 rounded-3xl bg-white/80 p-4 text-sm text-slate-600 ring-1 ring-black/5">
