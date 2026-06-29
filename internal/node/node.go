@@ -317,11 +317,7 @@ func (n *Node) currentPreparedViewLocked() int {
 	return 0
 }
 
-func (n *Node) newViewValueLocked() (string, int) {
-	target := n.ViewChangeTarget
-	if target == 0 {
-		target = n.State.View + 1
-	}
+func (n *Node) safeValueForViewLocked(target int) (string, int) {
 	bestView := -1
 	bestValue := ""
 	for _, msg := range n.ViewChangeEvidence[target] {
@@ -335,6 +331,14 @@ func (n *Node) newViewValueLocked() (string, int) {
 		return bestValue, bestView
 	}
 	return n.requestedValue, 0
+}
+
+func (n *Node) newViewValueLocked() (string, int) {
+	target := n.ViewChangeTarget
+	if target == 0 {
+		target = n.State.View + 1
+	}
+	return n.safeValueForViewLocked(target)
 }
 
 func (n *Node) outgoingValueLocked() string {

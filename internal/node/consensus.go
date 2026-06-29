@@ -86,6 +86,18 @@ func (n *Node) handlePrePrepare(msg model.Message) {
 		log.Printf("[%s] rejected conflicting PRE_PREPARE from %s", n.Config.ID, msg.From)
 		return
 	}
+	if n.DecidedProposal != nil && n.DecidedProposal.Digest != msg.Digest {
+		n.recordRejectLocked("decision already fixed")
+		n.appendEventLocked(model.EventRejected, &msg, "", "decision already fixed", false)
+		n.mu.Unlock()
+		return
+	}
+	if n.PreparedProposal != nil && n.PreparedProposal.Digest != msg.Digest {
+		n.recordRejectLocked("locked proposal mismatch")
+		n.appendEventLocked(model.EventRejected, &msg, "", "locked proposal mismatch", false)
+		n.mu.Unlock()
+		return
+	}
 
 	n.AcceptedCertificate = &acceptedProposalCertificate{Message: msg}
 	n.CandidateProposal = proposalFromMessage(msg)
@@ -159,11 +171,23 @@ func (n *Node) handlePrepare(msg model.Message) {
 		n.mu.Unlock()
 		return
 	}
+	if n.DecidedProposal != nil && n.DecidedProposal.Digest != msg.Digest {
+		n.recordRejectLocked("decision already fixed")
+		n.appendEventLocked(model.EventRejected, &msg, "", "decision already fixed", false)
+		n.mu.Unlock()
+		return
+	}
 	if n.CandidateProposal == nil {
 		n.storeEvidenceLocked(n.PrepareEvidence, msg)
 		n.appendEventLocked(model.EventBuffered, &msg, "", "waiting_for_preprepare", false)
 		n.mu.Unlock()
 		log.Printf("[%s] buffering PREPARE from %s until PRE_PREPARE arrives", n.Config.ID, msg.From)
+		return
+	}
+	if n.PreparedProposal != nil && n.PreparedProposal.Digest != msg.Digest {
+		n.recordRejectLocked("locked prepare mismatch")
+		n.appendEventLocked(model.EventRejected, &msg, "", "locked prepare mismatch", false)
+		n.mu.Unlock()
 		return
 	}
 	if msg.View != n.CandidateProposal.View || msg.Sequence != n.CandidateProposal.Sequence || msg.Digest != n.CandidateProposal.Digest || msg.Value != n.CandidateProposal.Value {
@@ -226,6 +250,12 @@ func (n *Node) handleCommit(msg model.Message) {
 		n.mu.Unlock()
 		return
 	}
+	if n.DecidedProposal != nil && n.DecidedProposal.Digest != msg.Digest {
+		n.recordRejectLocked("decision already fixed")
+		n.appendEventLocked(model.EventRejected, &msg, "", "decision already fixed", false)
+		n.mu.Unlock()
+		return
+	}
 	if n.PreparedProposal == nil {
 		n.storeEvidenceLocked(n.CommitEvidence, msg)
 		n.appendEventLocked(model.EventBuffered, &msg, "", "waiting_for_prepared_proposal", false)
@@ -234,8 +264,8 @@ func (n *Node) handleCommit(msg model.Message) {
 		return
 	}
 	if msg.View != n.PreparedProposal.View || msg.Sequence != n.PreparedProposal.Sequence || msg.Digest != n.PreparedProposal.Digest || msg.Value != n.PreparedProposal.Value {
-		n.recordRejectLocked("commit value mismatch")
-		n.appendEventLocked(model.EventRejected, &msg, "", "commit value mismatch", false)
+		n.recordRejectLocked("commit prepared value mismatch")
+		n.appendEventLocked(model.EventRejected, &msg, "", "commit prepared value mismatch", false)
 		n.mu.Unlock()
 		log.Printf("[%s] rejected COMMIT value mismatch from %s", n.Config.ID, msg.From)
 		return
@@ -469,6 +499,12 @@ func (n *Node) validateNewViewLocked(msg model.Message) bool {
 	if msg.Value != "" && msg.Digest != Digest(msg.Value) {
 		n.recordRejectLocked("new view digest mismatch")
 		n.appendEventLocked(model.EventRejected, &msg, "", "new view digest mismatch", false)
+		return false
+	}
+	safeValue, _ := n.safeValueForViewLocked(msg.View)
+	if safeValue != msg.Value {
+		n.recordRejectLocked("unsafe new view value")
+		n.appendEventLocked(model.EventRejected, &msg, "", "unsafe new view value", false)
 		return false
 	}
 	return true
