@@ -36,7 +36,10 @@ export async function startSimulation(input: StartSimulationInput): Promise<void
     body: JSON.stringify(input),
   });
   if (!response.ok) {
-    const detail = await response.text();
+    const detail = (await response.text()).trim();
+    if (response.status === 400) {
+      throw new Error(`Parameters not okay: ${detail}`);
+    }
     throw new Error(detail || `Failed to start simulation: ${response.status}`);
   }
 }

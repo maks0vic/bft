@@ -1,13 +1,13 @@
 type Props = {
   value: string;
-  nodeCount: number;
-  byzantineCount: number;
+  nodeCount: string;
+  byzantineCount: string;
   byzantineBehavior: string;
   status: string;
   busy: boolean;
   onChange: (value: string) => void;
-  onNodeCountChange: (value: number) => void;
-  onByzantineCountChange: (value: number) => void;
+  onNodeCountChange: (value: string) => void;
+  onByzantineCountChange: (value: string) => void;
   onByzantineBehaviorChange: (value: string) => void;
   onStart: () => void;
   onReset: () => void;
@@ -41,8 +41,8 @@ export function ControlPanel({
             placeholder="attack"
           />
         </div>
-        <NumericField label="Number of Nodes" value={nodeCount} min={4} onChange={onNodeCountChange} />
-        <NumericField label="Byzantine Nodes" value={byzantineCount} min={1} onChange={onByzantineCountChange} />
+        <PlainNumberField label="Number of Nodes" value={nodeCount} onChange={onNodeCountChange} />
+        <PlainNumberField label="Byzantine Nodes" value={byzantineCount} onChange={onByzantineCountChange} />
         <div>
           <label className="mb-2 block text-sm font-semibold uppercase tracking-[0.2em] text-slate-500">
             Byzantine Behavior
@@ -78,15 +78,15 @@ export function ControlPanel({
   );
 }
 
-function NumericField({ label, value, min, onChange }: { label: string; value: number; min: number; onChange: (value: number) => void }) {
+function PlainNumberField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
   return (
     <div>
       <label className="mb-2 block text-sm font-semibold uppercase tracking-[0.2em] text-slate-500">{label}</label>
       <input
-        type="number"
-        min={min}
+        type="text"
+        inputMode="numeric"
         value={value}
-        onChange={(event) => onChange(Number(event.target.value))}
+        onChange={(event) => onChange(event.target.value)}
         className="w-full rounded-2xl border border-slate-300 bg-slate-50 px-4 py-3 text-base outline-none transition focus:border-accent focus:bg-white"
       />
     </div>

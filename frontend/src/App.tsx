@@ -9,8 +9,8 @@ import { useStatePoll } from "./hooks/useStatePoll";
 
 export default function App() {
   const [value, setValue] = useState("attack");
-  const [nodeCount, setNodeCount] = useState(4);
-  const [byzantineCount, setByzantineCount] = useState(1);
+  const [nodeCount, setNodeCount] = useState("4");
+  const [byzantineCount, setByzantineCount] = useState("1");
   const [byzantineBehavior, setByzantineBehavior] = useState("conflicting_value");
   const [refreshKey, setRefreshKey] = useState(0);
   const [status, setStatus] = useState("Ready.");
@@ -19,17 +19,12 @@ export default function App() {
   const { state, error: stateError } = useStatePoll(refreshKey);
   const { events, error: eventError, setEvents, setEventsByNode, setLastSequence } = useEventPoll(refreshKey);
 
-  function handleNodeCountChange(next: number) {
-    const sanitized = Number.isFinite(next) ? Math.max(4, Math.floor(next)) : 4;
-    const maxByzantine = Math.max(1, Math.floor((sanitized - 1) / 3));
-    setNodeCount(sanitized);
-    setByzantineCount((current) => Math.min(current, maxByzantine));
+  function handleNodeCountChange(next: string) {
+    setNodeCount(next);
   }
 
-  function handleByzantineCountChange(next: number) {
-    const maxByzantine = Math.max(1, Math.floor((nodeCount - 1) / 3));
-    const sanitized = Number.isFinite(next) ? Math.max(1, Math.min(Math.floor(next), maxByzantine)) : 1;
-    setByzantineCount(sanitized);
+  function handleByzantineCountChange(next: string) {
+    setByzantineCount(next);
   }
 
   async function handleStart() {
@@ -41,8 +36,8 @@ export default function App() {
       setRefreshKey((current) => current + 1);
       await startSimulation({
         value,
-        nodeCount,
-        byzantineCount,
+        nodeCount: parseCount(nodeCount),
+        byzantineCount: parseCount(byzantineCount),
         byzantineBehavior,
       });
       setStatus(`Simulation started with ${nodeCount} nodes, ${byzantineCount} Byzantine, value "${value}".`);
@@ -127,4 +122,12 @@ export default function App() {
       </div>
     </main>
   );
+}
+
+function parseCount(value: string): number {
+  const parsed = Number.parseInt(value.trim(), 10);
+  if (Number.isNaN(parsed)) {
+    return 0;
+  }
+  return parsed;
 }
