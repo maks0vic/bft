@@ -56,11 +56,15 @@ func (n *Node) handlePrePrepare(msg model.Message) {
 		log.Printf("[%s] Byzantine silent node ignoring PRE_PREPARE", n.Config.ID)
 		return
 	}
+	if !n.validatePrePrepareLeaderLocked(msg) {
+		n.mu.Unlock()
+		return
+	}
 	if !n.validateBasicLocked(msg) {
 		n.mu.Unlock()
 		return
 	}
-	if existing := n.PrePrepare; existing != nil && existing.Digest != msg.Digest {
+	if existing := n.PrePrepare; existing != nil && (existing.View != msg.View || existing.Sequence != msg.Sequence || existing.Digest != msg.Digest) {
 		n.recordRejectLocked("conflicting pre-prepare")
 		n.appendEventLocked(model.EventRejected, &msg, "", "conflicting pre-prepare", false)
 		n.mu.Unlock()
@@ -244,6 +248,17 @@ func (n *Node) validateBasicLocked(msg model.Message) bool {
 		n.recordRejectLocked("digest mismatch")
 		n.appendEventLocked(model.EventRejected, &msg, "", "digest mismatch", false)
 		log.Printf("[%s] rejected %s from %s due to digest mismatch", n.Config.ID, msg.Type, msg.From)
+		return false
+	}
+	return true
+}
+
+func (n *Node) validatePrePrepareLeaderLocked(msg model.Message) bool {
+	expectedLeader := n.expectedLeaderIDLocked(n.State.View)
+	if msg.From != expectedLeader {
+		n.recordRejectLocked("unexpected leader")
+		n.appendEventLocked(model.EventRejected, &msg, "", "unexpected leader", false)
+		log.Printf("[%s] rejected %s from %s due to unexpected leader, expected %s", n.Config.ID, msg.Type, msg.From, expectedLeader)
 		return false
 	}
 	return true

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -148,6 +149,19 @@ func (n *Node) Reset() {
 	defer n.mu.Unlock()
 
 	n.resetLocked()
+}
+
+func (n *Node) expectedLeaderIDLocked(view int) string {
+	ids := make([]string, 0, len(n.Config.Peers)+1)
+	ids = append(ids, n.Config.ID)
+	for _, peer := range n.Config.Peers {
+		ids = append(ids, peer.ID)
+	}
+	sort.Strings(ids)
+	if len(ids) == 0 {
+		return ""
+	}
+	return ids[view%len(ids)]
 }
 
 func (n *Node) resetLocked() {
