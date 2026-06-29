@@ -21,6 +21,13 @@ type quorumCertificate struct {
 	QuorumSize int
 }
 
+type proposalState struct {
+	View     int
+	Sequence int
+	Value    string
+	Digest   string
+}
+
 type Node struct {
 	Config model.NodeConfig
 
@@ -31,6 +38,9 @@ type Node struct {
 	AcceptedCertificate  *acceptedProposalCertificate
 	PreparedCertificate  *quorumCertificate
 	CommittedCertificate *quorumCertificate
+	CandidateProposal    *proposalState
+	PreparedProposal     *proposalState
+	DecidedProposal      *proposalState
 
 	PrepareEvidence map[string]map[string]model.Message
 	CommitEvidence  map[string]map[string]model.Message
@@ -64,13 +74,24 @@ func evidenceBucketKey(view int, sequence int, digest string) string {
 }
 
 func (n *Node) candidateDigestLocked() string {
-	if n.AcceptedCertificate != nil {
-		return n.AcceptedCertificate.Message.Digest
+	if n.CandidateProposal != nil {
+		return n.CandidateProposal.Digest
 	}
-	if n.State.ProposedValue == "" {
-		return ""
+	return ""
+}
+
+func (n *Node) preparedDigestLocked() string {
+	if n.PreparedProposal != nil {
+		return n.PreparedProposal.Digest
 	}
-	return Digest(n.State.ProposedValue)
+	return ""
+}
+
+func (n *Node) decidedValueLocked() string {
+	if n.DecidedProposal != nil {
+		return n.DecidedProposal.Value
+	}
+	return ""
 }
 
 func (n *Node) evidenceCountLocked(evidence map[string]map[string]model.Message, view int, sequence int, digest string) int {
@@ -95,7 +116,11 @@ func (n *Node) matchingPrepareCountLocked() int {
 }
 
 func (n *Node) matchingCommitCountLocked() int {
-	return n.evidenceCountLocked(n.CommitEvidence, n.State.View, n.State.Sequence, n.candidateDigestLocked())
+	digest := n.preparedDigestLocked()
+	if digest == "" {
+		digest = n.candidateDigestLocked()
+	}
+	return n.evidenceCountLocked(n.CommitEvidence, n.State.View, n.State.Sequence, digest)
 }
 
 func (n *Node) buildQuorumCertificateLocked(evidence map[string]map[string]model.Message, view int, sequence int, digest string) *quorumCertificate {
@@ -152,7 +177,7 @@ func (n *Node) phaseLocked() string {
 		return "committed"
 	case n.State.Prepared:
 		return "prepared"
-	case n.State.ProposedValue != "":
+	case n.CandidateProposal != nil:
 		return "proposed"
 	default:
 		return "idle"
@@ -161,8 +186,8 @@ func (n *Node) phaseLocked() string {
 
 func (n *Node) outgoingValueLocked() string {
 	acceptedValue := ""
-	if n.AcceptedCertificate != nil {
-		acceptedValue = n.AcceptedCertificate.Message.Value
+	if n.CandidateProposal != nil {
+		acceptedValue = n.CandidateProposal.Value
 	}
 	if acceptedValue == "" {
 		return ""
@@ -184,9 +209,10 @@ func (n *Node) outgoingValueLocked() string {
 
 func (n *Node) stateResponseLocked() model.StateResponse {
 	acceptedValue := ""
-	if n.AcceptedCertificate != nil {
-		acceptedValue = n.AcceptedCertificate.Message.Value
+	if n.CandidateProposal != nil {
+		acceptedValue = n.CandidateProposal.Value
 	}
+	n.State.Decision = n.decidedValueLocked()
 
 	return model.StateResponse{
 		ID:             n.Config.ID,
@@ -233,6 +259,9 @@ func (n *Node) resetLocked() {
 	n.AcceptedCertificate = nil
 	n.PreparedCertificate = nil
 	n.CommittedCertificate = nil
+	n.CandidateProposal = nil
+	n.PreparedProposal = nil
+	n.DecidedProposal = nil
 	n.PrepareEvidence = make(map[string]map[string]model.Message)
 	n.CommitEvidence = make(map[string]map[string]model.Message)
 	n.RejectCount = 0

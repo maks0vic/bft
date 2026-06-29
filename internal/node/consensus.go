@@ -7,6 +7,15 @@ import (
 	"bft/internal/model"
 )
 
+func proposalFromMessage(msg model.Message) *proposalState {
+	return &proposalState{
+		View:     msg.View,
+		Sequence: msg.Sequence,
+		Value:    msg.Value,
+		Digest:   msg.Digest,
+	}
+}
+
 func (n *Node) StartConsensus(value string) {
 	n.mu.Lock()
 	if n.consensusStart {
@@ -74,8 +83,9 @@ func (n *Node) handlePrePrepare(msg model.Message) {
 	}
 
 	n.AcceptedCertificate = &acceptedProposalCertificate{Message: msg}
+	n.CandidateProposal = proposalFromMessage(msg)
 	n.consensusStart = true
-	n.State.ProposedValue = msg.Value
+	n.State.ProposedValue = n.CandidateProposal.Value
 
 	prepareValue := msg.Value
 	if n.Config.Byzantine && n.Config.Behavior == model.BehaviorConflictingValue {
@@ -98,9 +108,17 @@ func (n *Node) handlePrePrepare(msg model.Message) {
 		n.State.Prepared = n.PreparedCertificate != nil
 		n.appendEventLocked(model.EventQuorumReached, &prepare, "", fmt.Sprintf("prepare quorum reached certificate digest=%s quorum=%d", prepare.Digest, matchCount), false)
 		n.appendEventLocked(model.EventNodePrepared, &prepare, "", fmt.Sprintf("prepared certificate formed digest=%s quorum=%d", prepare.Digest, matchCount), false)
-		commitValue := n.State.ProposedValue
+		if n.PreparedCertificate != nil && n.CandidateProposal != nil {
+			n.PreparedProposal = &proposalState{
+				View:     n.CandidateProposal.View,
+				Sequence: n.CandidateProposal.Sequence,
+				Value:    n.CandidateProposal.Value,
+				Digest:   n.CandidateProposal.Digest,
+			}
+		}
+		commitValue := n.PreparedProposal.Value
 		if n.Config.Byzantine && n.Config.Behavior == model.BehaviorConflictingValue {
-			commitValue = n.State.ProposedValue + "_tampered"
+			commitValue = n.PreparedProposal.Value + "_tampered"
 		}
 		commit = model.Message{
 			Type:     model.MsgCommit,
@@ -135,14 +153,14 @@ func (n *Node) handlePrepare(msg model.Message) {
 		n.mu.Unlock()
 		return
 	}
-	if n.State.ProposedValue == "" {
+	if n.CandidateProposal == nil {
 		n.storeEvidenceLocked(n.PrepareEvidence, msg)
 		n.appendEventLocked(model.EventBuffered, &msg, "", "waiting_for_preprepare", false)
 		n.mu.Unlock()
 		log.Printf("[%s] buffering PREPARE from %s until PRE_PREPARE arrives", n.Config.ID, msg.From)
 		return
 	}
-	if msg.Value != n.State.ProposedValue {
+	if msg.View != n.CandidateProposal.View || msg.Sequence != n.CandidateProposal.Sequence || msg.Digest != n.CandidateProposal.Digest || msg.Value != n.CandidateProposal.Value {
 		n.recordRejectLocked("prepare value mismatch")
 		n.appendEventLocked(model.EventRejected, &msg, "", "prepare value mismatch", false)
 		n.mu.Unlock()
@@ -160,10 +178,18 @@ func (n *Node) handlePrepare(msg model.Message) {
 	n.State.Prepared = n.PreparedCertificate != nil
 	n.appendEventLocked(model.EventQuorumReached, &msg, "", fmt.Sprintf("prepare quorum reached certificate digest=%s quorum=%d", msg.Digest, matchCount), false)
 	n.appendEventLocked(model.EventNodePrepared, &msg, "", fmt.Sprintf("prepared certificate formed digest=%s quorum=%d", msg.Digest, matchCount), false)
+	if n.PreparedCertificate != nil && n.CandidateProposal != nil {
+		n.PreparedProposal = &proposalState{
+			View:     n.CandidateProposal.View,
+			Sequence: n.CandidateProposal.Sequence,
+			Value:    n.CandidateProposal.Value,
+			Digest:   n.CandidateProposal.Digest,
+		}
+	}
 
-	commitValue := n.State.ProposedValue
+	commitValue := n.PreparedProposal.Value
 	if n.Config.Byzantine && n.Config.Behavior == model.BehaviorConflictingValue {
-		commitValue = n.State.ProposedValue + "_tampered"
+		commitValue = n.PreparedProposal.Value + "_tampered"
 	}
 
 	commit := model.Message{
@@ -193,14 +219,14 @@ func (n *Node) handleCommit(msg model.Message) {
 		n.mu.Unlock()
 		return
 	}
-	if n.State.ProposedValue == "" {
+	if n.PreparedProposal == nil {
 		n.storeEvidenceLocked(n.CommitEvidence, msg)
-		n.appendEventLocked(model.EventBuffered, &msg, "", "waiting_for_preprepare", false)
+		n.appendEventLocked(model.EventBuffered, &msg, "", "waiting_for_prepared_proposal", false)
 		n.mu.Unlock()
-		log.Printf("[%s] buffering COMMIT from %s until PRE_PREPARE arrives", n.Config.ID, msg.From)
+		log.Printf("[%s] buffering COMMIT from %s until prepared proposal exists", n.Config.ID, msg.From)
 		return
 	}
-	if msg.Value != n.State.ProposedValue {
+	if msg.View != n.PreparedProposal.View || msg.Sequence != n.PreparedProposal.Sequence || msg.Digest != n.PreparedProposal.Digest || msg.Value != n.PreparedProposal.Value {
 		n.recordRejectLocked("commit value mismatch")
 		n.appendEventLocked(model.EventRejected, &msg, "", "commit value mismatch", false)
 		n.mu.Unlock()
@@ -223,11 +249,17 @@ func (n *Node) handleCommit(msg model.Message) {
 		return
 	}
 
+	n.DecidedProposal = &proposalState{
+		View:     n.PreparedProposal.View,
+		Sequence: n.PreparedProposal.Sequence,
+		Value:    n.PreparedProposal.Value,
+		Digest:   n.PreparedProposal.Digest,
+	}
 	n.State.Committed = true
 	n.appendEventLocked(model.EventNodeCommitted, &msg, "", fmt.Sprintf("committed certificate formed digest=%s quorum=%d", msg.Digest, matchCount), false)
 	n.appendEventLocked(model.EventQuorumReached, &msg, "", fmt.Sprintf("commit quorum reached certificate digest=%s quorum=%d", msg.Digest, matchCount), false)
 	n.State.Decided = true
-	n.State.Decision = n.State.ProposedValue
+	n.State.Decision = n.DecidedProposal.Value
 	n.consensusStart = false
 	decision := n.State.Decision
 	n.appendEventLocked(model.EventNodeDecided, &msg, "", "decision="+decision, false)
