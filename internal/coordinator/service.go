@@ -166,6 +166,24 @@ func (s *Service) HandleStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	for _, cfg := range run.configs {
+		if cfg.Leader {
+			continue
+		}
+		resp, err := s.httpClient.Post("http://"+cfg.Address+"/start", "application/json", bytes.NewBuffer(body))
+		if err != nil {
+			_ = s.stopActiveRun()
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode >= 300 {
+			_ = s.stopActiveRun()
+			http.Error(w, fmt.Sprintf("replica arm failed: %s", resp.Status), http.StatusBadGateway)
+			return
+		}
+	}
+
 	resp, err := s.httpClient.Post("http://"+leader.Address+"/start", "application/json", bytes.NewBuffer(body))
 	if err != nil {
 		_ = s.stopActiveRun()

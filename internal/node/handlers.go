@@ -22,7 +22,10 @@ func (n *Node) handleStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !n.Config.Leader {
-		http.Error(w, "only leader can start consensus", http.StatusBadRequest)
+		n.PrimeConsensusRound()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(model.ResetResponse{Status: "armed"})
 		return
 	}
 

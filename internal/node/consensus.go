@@ -23,7 +23,7 @@ func (n *Node) StartConsensus(value string) {
 		log.Printf("[%s] consensus already started", n.Config.ID)
 		return
 	}
-	n.consensusStart = true
+	n.beginRoundLocked()
 
 	msg := model.Message{
 		Type:     model.MsgPrePrepare,
@@ -84,8 +84,8 @@ func (n *Node) handlePrePrepare(msg model.Message) {
 
 	n.AcceptedCertificate = &acceptedProposalCertificate{Message: msg}
 	n.CandidateProposal = proposalFromMessage(msg)
-	n.consensusStart = true
 	n.State.ProposedValue = n.CandidateProposal.Value
+	n.noteProposalAcceptedLocked()
 
 	prepareValue := msg.Value
 	if n.Config.Byzantine && n.Config.Behavior == model.BehaviorConflictingValue {
@@ -115,6 +115,7 @@ func (n *Node) handlePrePrepare(msg model.Message) {
 				Value:    n.CandidateProposal.Value,
 				Digest:   n.CandidateProposal.Digest,
 			}
+			n.notePreparedLocked()
 		}
 		commitValue := n.PreparedProposal.Value
 		if n.Config.Byzantine && n.Config.Behavior == model.BehaviorConflictingValue {
@@ -185,6 +186,7 @@ func (n *Node) handlePrepare(msg model.Message) {
 			Value:    n.CandidateProposal.Value,
 			Digest:   n.CandidateProposal.Digest,
 		}
+		n.notePreparedLocked()
 	}
 
 	commitValue := n.PreparedProposal.Value
@@ -260,7 +262,7 @@ func (n *Node) handleCommit(msg model.Message) {
 	n.appendEventLocked(model.EventQuorumReached, &msg, "", fmt.Sprintf("commit quorum reached certificate digest=%s quorum=%d", msg.Digest, matchCount), false)
 	n.State.Decided = true
 	n.State.Decision = n.DecidedProposal.Value
-	n.consensusStart = false
+	n.finishConsensusLocked()
 	decision := n.State.Decision
 	n.appendEventLocked(model.EventNodeDecided, &msg, "", "decision="+decision, false)
 	n.mu.Unlock()

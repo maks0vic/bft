@@ -8,7 +8,8 @@ export type EventKind =
   | "NODE_DECIDED"
   | "BYZANTINE_ACTION"
   | "MESSAGE_REJECTED"
-  | "MESSAGE_BUFFERED";
+  | "MESSAGE_BUFFERED"
+  | "TIMEOUT";
 
 export type NodeView = {
   id: string;

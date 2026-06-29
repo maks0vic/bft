@@ -23,6 +23,7 @@ const (
 	EventByzantineAction  EventKind = "BYZANTINE_ACTION"
 	EventRejected         EventKind = "MESSAGE_REJECTED"
 	EventBuffered         EventKind = "MESSAGE_BUFFERED"
+	EventTimeout          EventKind = "TIMEOUT"
 	EventReset            EventKind = "SIMULATION_RESET"
 )
 
@@ -64,6 +65,8 @@ type ConsensusState struct {
 	Committed     bool   `json:"committed"`
 	Decided       bool   `json:"decided"`
 	Decision      string `json:"decision"`
+	TimedOut      bool   `json:"timedOut"`
+	TimeoutReason string `json:"timeoutReason,omitempty"`
 }
 
 type StateResponse struct {

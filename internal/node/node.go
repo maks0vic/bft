@@ -11,6 +11,11 @@ import (
 	"bft/internal/model"
 )
 
+const (
+	proposalTimeoutWindow = 2 * time.Second
+	progressTimeoutWindow = 2 * time.Second
+)
+
 type acceptedProposalCertificate struct {
 	Message model.Message
 }
@@ -50,6 +55,7 @@ type Node struct {
 	consensusStart bool
 	Events         []model.NodeEvent
 	eventCounter   int64
+	timeoutEpoch   int64
 }
 
 func NewNode(cfg model.NodeConfig) *Node {
@@ -173,6 +179,8 @@ func (n *Node) phaseLocked() string {
 	switch {
 	case n.State.Decided:
 		return "decided"
+	case n.State.TimedOut:
+		return "timed_out"
 	case n.State.Committed:
 		return "committed"
 	case n.State.Prepared:
@@ -182,6 +190,86 @@ func (n *Node) phaseLocked() string {
 	default:
 		return "idle"
 	}
+}
+
+func (n *Node) beginRoundLocked() {
+	n.consensusStart = true
+	n.State.TimedOut = false
+	n.State.TimeoutReason = ""
+	n.timeoutEpoch++
+}
+
+func (n *Node) PrimeConsensusRound() {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	n.beginRoundLocked()
+	n.scheduleProposalTimeoutLocked()
+}
+
+func (n *Node) noteProposalAcceptedLocked() {
+	n.State.TimedOut = false
+	n.State.TimeoutReason = ""
+	n.scheduleProgressTimeoutLocked("waiting_for_prepare_quorum")
+}
+
+func (n *Node) notePreparedLocked() {
+	n.State.TimedOut = false
+	n.State.TimeoutReason = ""
+	n.scheduleProgressTimeoutLocked("waiting_for_commit_quorum")
+}
+
+func (n *Node) finishConsensusLocked() {
+	n.consensusStart = false
+	n.timeoutEpoch++
+}
+
+func (n *Node) scheduleProposalTimeoutLocked() {
+	epoch := n.timeoutEpoch
+	view := n.State.View
+	sequence := n.State.Sequence
+	go n.fireTimeoutAfter(proposalTimeoutWindow, epoch, view, sequence, "waiting_for_preprepare", func() bool {
+		n.mu.Lock()
+		defer n.mu.Unlock()
+		return n.consensusStart && !n.State.Decided && n.CandidateProposal == nil && n.State.View == view && n.State.Sequence == sequence
+	})
+}
+
+func (n *Node) scheduleProgressTimeoutLocked(reason string) {
+	epoch := n.timeoutEpoch
+	view := n.State.View
+	sequence := n.State.Sequence
+	go n.fireTimeoutAfter(progressTimeoutWindow, epoch, view, sequence, reason, func() bool {
+		n.mu.Lock()
+		defer n.mu.Unlock()
+		if !n.consensusStart || n.State.Decided || n.State.View != view || n.State.Sequence != sequence {
+			return false
+		}
+		switch reason {
+		case "waiting_for_prepare_quorum":
+			return n.PreparedCertificate == nil
+		case "waiting_for_commit_quorum":
+			return n.PreparedCertificate != nil && n.CommittedCertificate == nil
+		default:
+			return false
+		}
+	})
+}
+
+func (n *Node) fireTimeoutAfter(delay time.Duration, epoch int64, view int, sequence int, reason string, shouldTrigger func() bool) {
+	time.Sleep(delay)
+	if !shouldTrigger() {
+		return
+	}
+
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if epoch != n.timeoutEpoch || !n.consensusStart || n.State.Decided || n.State.View != view || n.State.Sequence != sequence {
+		return
+	}
+	n.State.TimedOut = true
+	n.State.TimeoutReason = reason
+	n.appendEventLocked(model.EventTimeout, nil, "", reason, n.Config.Byzantine)
 }
 
 func (n *Node) outgoingValueLocked() string {
@@ -269,6 +357,7 @@ func (n *Node) resetLocked() {
 	n.consensusStart = false
 	n.Events = nil
 	n.eventCounter = 0
+	n.timeoutEpoch++
 }
 
 func (n *Node) isByzantinePeer(id string) bool {
