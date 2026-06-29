@@ -36,7 +36,13 @@ func validate(cfg model.NodeConfig) error {
 	}
 	if cfg.Byzantine {
 		switch cfg.Behavior {
-		case "", model.BehaviorSilent, model.BehaviorConflictingValue:
+		case "",
+			model.BehaviorSilent,
+			model.BehaviorConflictingValue,
+			model.BehaviorInvalidLeaderProposal,
+			model.BehaviorStaleViewSpam,
+			model.BehaviorMalformedCertificate,
+			model.BehaviorEquivocatingViewChange:
 		default:
 			return fmt.Errorf("unsupported byzantine behavior %q", cfg.Behavior)
 		}

@@ -63,6 +63,7 @@ func (n *Node) handleMessage(w http.ResponseWriter, r *http.Request) {
 	n.mu.Lock()
 	n.appendEventLocked(model.EventMessageReceived, &msg, n.Config.ID, "", n.isByzantinePeer(msg.From))
 	n.mu.Unlock()
+	n.maybeBroadcastStaleViewSpam(msg)
 	n.ProcessMessage(msg)
 
 	w.WriteHeader(http.StatusOK)
@@ -110,4 +111,34 @@ func (n *Node) handleReset(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(model.ResetResponse{Status: "reset"})
+}
+
+func (n *Node) maybeBroadcastStaleViewSpam(trigger model.Message) {
+	n.mu.Lock()
+	if !n.Config.Byzantine || n.Config.Behavior != model.BehaviorStaleViewSpam {
+		n.mu.Unlock()
+		return
+	}
+
+	staleView := n.State.View
+	if staleView > 0 {
+		staleView--
+	}
+	staleSequence := n.State.Sequence - 1
+	if staleSequence < 0 {
+		staleSequence = 0
+	}
+	spam := model.Message{
+		Type:      model.MsgPrepare,
+		View:      staleView,
+		Sequence:  staleSequence,
+		From:      n.Config.ID,
+		Value:     n.requestedValue,
+		Digest:    Digest(n.requestedValue),
+		Signature: "",
+	}
+	n.appendEventLocked(model.EventByzantineAction, &spam, "", "stale_view_spam", true)
+	n.mu.Unlock()
+
+	n.Broadcast(spam)
 }

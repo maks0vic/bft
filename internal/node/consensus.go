@@ -34,6 +34,9 @@ func (n *Node) StartConsensus(value string) {
 		Value:    value,
 		Digest:   Digest(value),
 	}
+	if n.Config.Byzantine && n.Config.Behavior == model.BehaviorInvalidLeaderProposal {
+		msg.Digest = "invalid-leader-digest"
+	}
 	msg.Signature = signatureForMessage(msg)
 	n.appendEventLocked(model.EventConsensusStarted, &msg, "", "leader_start", false)
 	n.mu.Unlock()
@@ -418,6 +421,9 @@ func (n *Node) handleViewChange(msg model.Message) {
 	}
 	if value != "" {
 		newView.Digest = Digest(value)
+	}
+	if n.Config.Byzantine && n.Config.Behavior == model.BehaviorInvalidLeaderProposal {
+		newView.Digest = "invalid-leader-digest"
 	}
 	newView.Signature = signatureForMessage(newView)
 	n.NewViewSent[msg.View] = true

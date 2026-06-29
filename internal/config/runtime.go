@@ -66,7 +66,12 @@ func validateStartRequest(req model.StartRequest) error {
 		return fmt.Errorf("at least one honest node is required")
 	}
 	switch req.ByzantineBehavior {
-	case model.BehaviorSilent, model.BehaviorConflictingValue:
+	case model.BehaviorSilent,
+		model.BehaviorConflictingValue,
+		model.BehaviorInvalidLeaderProposal,
+		model.BehaviorStaleViewSpam,
+		model.BehaviorMalformedCertificate,
+		model.BehaviorEquivocatingViewChange:
 	default:
 		return fmt.Errorf("unsupported byzantine behavior %q", req.ByzantineBehavior)
 	}

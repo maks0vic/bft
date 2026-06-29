@@ -30,8 +30,12 @@ const (
 )
 
 const (
-	BehaviorSilent           = "silent"
-	BehaviorConflictingValue = "conflicting_value"
+	BehaviorSilent                 = "silent"
+	BehaviorConflictingValue       = "conflicting_value"
+	BehaviorInvalidLeaderProposal  = "invalid_leader_proposal"
+	BehaviorStaleViewSpam          = "stale_view_spam"
+	BehaviorMalformedCertificate   = "malformed_certificate"
+	BehaviorEquivocatingViewChange = "equivocating_view_change"
 )
 
 type Message struct {
