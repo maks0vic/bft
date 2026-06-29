@@ -89,8 +89,7 @@ func (n *Node) handlePrePrepare(msg model.Message) {
 		Value:    prepareValue,
 		Digest:   Digest(prepareValue),
 	}
-	n.PrepareMsgs[n.Config.ID] = prepare
-	matchCount := n.matchingPrepareCountLocked()
+	matchCount := n.storeEvidenceLocked(n.PrepareEvidence, prepare)
 	shouldCommit := false
 	var commit model.Message
 	if !n.State.Prepared && matchCount >= n.quorum() {
@@ -109,7 +108,7 @@ func (n *Node) handlePrePrepare(msg model.Message) {
 			Value:    commitValue,
 			Digest:   Digest(commitValue),
 		}
-		n.CommitMsgs[n.Config.ID] = commit
+		n.storeEvidenceLocked(n.CommitEvidence, commit)
 		shouldCommit = true
 	}
 	n.mu.Unlock()
@@ -135,7 +134,7 @@ func (n *Node) handlePrepare(msg model.Message) {
 		return
 	}
 	if n.State.ProposedValue == "" {
-		n.PrepareMsgs[msg.From] = msg
+		n.storeEvidenceLocked(n.PrepareEvidence, msg)
 		n.appendEventLocked(model.EventBuffered, &msg, "", "waiting_for_preprepare", false)
 		n.mu.Unlock()
 		log.Printf("[%s] buffering PREPARE from %s until PRE_PREPARE arrives", n.Config.ID, msg.From)
@@ -149,8 +148,7 @@ func (n *Node) handlePrepare(msg model.Message) {
 		return
 	}
 
-	n.PrepareMsgs[msg.From] = msg
-	matchCount := n.matchingPrepareCountLocked()
+	matchCount := n.storeEvidenceLocked(n.PrepareEvidence, msg)
 	if n.State.Prepared || matchCount < n.quorum() {
 		n.mu.Unlock()
 		return
@@ -173,7 +171,7 @@ func (n *Node) handlePrepare(msg model.Message) {
 		Value:    commitValue,
 		Digest:   Digest(commitValue),
 	}
-	n.CommitMsgs[n.Config.ID] = commit
+	n.storeEvidenceLocked(n.CommitEvidence, commit)
 	n.mu.Unlock()
 
 	log.Printf("[%s] prepared with %d matching PREPARE messages, broadcasting COMMIT", n.Config.ID, matchCount)
@@ -193,7 +191,7 @@ func (n *Node) handleCommit(msg model.Message) {
 		return
 	}
 	if n.State.ProposedValue == "" {
-		n.CommitMsgs[msg.From] = msg
+		n.storeEvidenceLocked(n.CommitEvidence, msg)
 		n.appendEventLocked(model.EventBuffered, &msg, "", "waiting_for_preprepare", false)
 		n.mu.Unlock()
 		log.Printf("[%s] buffering COMMIT from %s until PRE_PREPARE arrives", n.Config.ID, msg.From)
@@ -207,8 +205,7 @@ func (n *Node) handleCommit(msg model.Message) {
 		return
 	}
 
-	n.CommitMsgs[msg.From] = msg
-	matchCount := n.matchingCommitCountLocked()
+	matchCount := n.storeEvidenceLocked(n.CommitEvidence, msg)
 	if n.State.Decided || matchCount < n.quorum() {
 		n.mu.Unlock()
 		return

@@ -19,8 +19,8 @@ type Node struct {
 	State      model.ConsensusState
 	PrePrepare *model.Message
 
-	PrepareMsgs map[string]model.Message
-	CommitMsgs  map[string]model.Message
+	PrepareEvidence map[string]map[string]model.Message
+	CommitEvidence  map[string]map[string]model.Message
 
 	RejectCount    int
 	LastReject     string
@@ -46,24 +46,43 @@ func (n *Node) quorum() int {
 	return 2*f + 1
 }
 
-func (n *Node) matchingPrepareCountLocked() int {
-	count := 0
-	for _, msg := range n.PrepareMsgs {
-		if msg.Value == n.State.ProposedValue {
-			count++
-		}
+func evidenceBucketKey(view int, sequence int, digest string) string {
+	return fmt.Sprintf("%d:%d:%s", view, sequence, digest)
+}
+
+func (n *Node) candidateDigestLocked() string {
+	if n.PrePrepare != nil {
+		return n.PrePrepare.Digest
 	}
-	return count
+	if n.State.ProposedValue == "" {
+		return ""
+	}
+	return Digest(n.State.ProposedValue)
+}
+
+func (n *Node) evidenceCountLocked(evidence map[string]map[string]model.Message, view int, sequence int, digest string) int {
+	if digest == "" {
+		return 0
+	}
+	bucket := evidence[evidenceBucketKey(view, sequence, digest)]
+	return len(bucket)
+}
+
+func (n *Node) storeEvidenceLocked(evidence map[string]map[string]model.Message, msg model.Message) int {
+	key := evidenceBucketKey(msg.View, msg.Sequence, msg.Digest)
+	if evidence[key] == nil {
+		evidence[key] = make(map[string]model.Message)
+	}
+	evidence[key][msg.From] = msg
+	return len(evidence[key])
+}
+
+func (n *Node) matchingPrepareCountLocked() int {
+	return n.evidenceCountLocked(n.PrepareEvidence, n.State.View, n.State.Sequence, n.candidateDigestLocked())
 }
 
 func (n *Node) matchingCommitCountLocked() int {
-	count := 0
-	for _, msg := range n.CommitMsgs {
-		if msg.Value == n.State.ProposedValue {
-			count++
-		}
-	}
-	return count
+	return n.evidenceCountLocked(n.CommitEvidence, n.State.View, n.State.Sequence, n.candidateDigestLocked())
 }
 
 func (n *Node) recordRejectLocked(reason string) {
@@ -170,8 +189,8 @@ func (n *Node) resetLocked() {
 		Sequence: 1,
 	}
 	n.PrePrepare = nil
-	n.PrepareMsgs = make(map[string]model.Message)
-	n.CommitMsgs = make(map[string]model.Message)
+	n.PrepareEvidence = make(map[string]map[string]model.Message)
+	n.CommitEvidence = make(map[string]map[string]model.Message)
 	n.RejectCount = 0
 	n.LastReject = ""
 	n.consensusStart = false
