@@ -21,7 +21,7 @@ import (
 var launcherHTTPClient = &http.Client{Timeout: 2 * time.Second}
 
 func main() {
-	coordinatorAddr := flag.String("coordinator-addr", "localhost:9000", "coordinator listen address")
+	coordinatorAddr := flag.String("coordinator-addr", "127.0.0.1:9000", "coordinator listen address")
 	nodeBasePort := flag.Int("node-base-port", 8001, "starting port for generated node processes")
 	flag.Parse()
 
@@ -39,8 +39,10 @@ func main() {
 	defer func() {
 		cancel()
 		for _, cmd := range procs {
-			if cmd.Process != nil {
-				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			if cmd.Process != nil && cmd.ProcessState == nil {
+				if process, err := os.FindProcess(cmd.Process.Pid); err == nil {
+					_ = process.Kill()
+				}
 			}
 			_ = cmd.Wait()
 		}
@@ -62,7 +64,6 @@ func main() {
 }
 
 func startCmd(prefix string, cmd *exec.Cmd, procs *[]*exec.Cmd) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		log.Fatalf("stdout pipe for %s: %v", prefix, err)

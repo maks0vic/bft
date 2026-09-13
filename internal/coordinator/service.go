@@ -12,9 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
-	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"bft/internal/config"
@@ -446,7 +444,6 @@ func (s *Service) startRun(configs []model.NodeConfig) (*activeRun, error) {
 		cmd.Dir = s.repoRoot
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		if err := cmd.Start(); err != nil {
 			return run, err
 		}
@@ -503,7 +500,7 @@ func (s *Service) cleanupRun(run *activeRun) error {
 		if cmd == nil || cmd.Process == nil {
 			continue
 		}
-		if err := signalProcessGroup(cmd, syscall.SIGTERM); err != nil && !isFinishedProcessError(err) {
+		if err := killProcess(cmd); err != nil && !isFinishedProcessError(err) {
 			firstErr = pickErr(firstErr, err)
 		}
 	}
@@ -517,7 +514,7 @@ func (s *Service) cleanupRun(run *activeRun) error {
 			address = run.configs[i].Address
 		}
 		if err := waitCmdExit(cmd, 2*time.Second); err != nil {
-			if killErr := signalProcessGroup(cmd, syscall.SIGKILL); killErr != nil && !isFinishedProcessError(killErr) {
+			if killErr := killProcess(cmd); killErr != nil && !isFinishedProcessError(killErr) {
 				firstErr = pickErr(firstErr, killErr)
 			}
 			if killErr := waitCmdExit(cmd, 2*time.Second); killErr != nil {
@@ -590,11 +587,18 @@ func waitCmdExit(cmd *exec.Cmd, timeout time.Duration) error {
 	}
 }
 
-func signalProcessGroup(cmd *exec.Cmd, sig syscall.Signal) error {
+func killProcess(cmd *exec.Cmd) error {
 	if cmd == nil || cmd.Process == nil {
 		return nil
 	}
-	return syscall.Kill(-cmd.Process.Pid, sig)
+	if cmd.ProcessState != nil {
+		return nil
+	}
+	process, err := os.FindProcess(cmd.Process.Pid)
+	if err != nil {
+		return err
+	}
+	return process.Kill()
 }
 
 func (s *Service) reclaimNodePortWindow() error {
@@ -608,56 +612,8 @@ func (s *Service) reclaimNodePortWindow() error {
 }
 
 func reclaimNodeListenerOnPort(port int) error {
-	cmd := exec.Command("lsof", "-nP", fmt.Sprintf("-iTCP:%d", port), "-sTCP:LISTEN", "-Fpc")
-	output, err := cmd.Output()
-	if err != nil {
-		var exitErr *exec.ExitError
-		if ok := errorAs(err, &exitErr); ok && exitErr.ExitCode() == 1 {
-			return nil
-		}
-		return err
-	}
-
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-	currentPID := 0
-	currentCmd := ""
-	for _, line := range lines {
-		if len(line) < 2 {
-			continue
-		}
-		switch line[0] {
-		case 'p':
-			pid, parseErr := strconv.Atoi(line[1:])
-			if parseErr != nil {
-				currentPID = 0
-				continue
-			}
-			currentPID = pid
-		case 'c':
-			currentCmd = line[1:]
-			if currentPID != 0 && currentCmd == "node" {
-				if err := syscall.Kill(currentPID, syscall.SIGKILL); err != nil && err != syscall.ESRCH {
-					return err
-				}
-			}
-		}
-	}
-
 	address := fmt.Sprintf("localhost:%d", port)
 	return waitForPortReleased(address, 2*time.Second)
-}
-
-func errorAs(err error, target interface{}) bool {
-	switch v := target.(type) {
-	case **exec.ExitError:
-		exitErr, ok := err.(*exec.ExitError)
-		if ok {
-			*v = exitErr
-		}
-		return ok
-	default:
-		return false
-	}
 }
 
 func waitForPortReleased(address string, timeout time.Duration) error {

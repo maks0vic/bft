@@ -68,8 +68,8 @@ export default function App() {
     <main className="min-h-screen bg-[radial-gradient(circle_at_top,_#f7f2e8,_#e8eee8_38%,_#d7e0db)] px-4 py-6 text-ink md:px-8">
       <div className="mx-auto max-w-7xl space-y-6">
         <header className="rounded-[2rem] bg-[linear-gradient(135deg,_rgba(16,33,43,0.96),_rgba(18,67,78,0.88))] px-6 py-8 text-white shadow-[0_24px_80px_rgba(16,33,43,0.2)] md:px-8">
-          <p className="text-sm font-semibold uppercase tracking-[0.3em] text-emerald-200">Byzantine Fault Tolerant Consensus</p>
-          <h1 className="mt-3 text-4xl font-semibold tracking-tight md:text-5xl">Mission Board</h1>
+          <p className="text-sm font-semibold uppercase tracking-[0.3em] text-emerald-200">Mission Board</p>
+          <h1 className="mt-3 text-3xl font-semibold tracking-tight md:text-4xl">Byzantine Fault Tolerant Consensus</h1>
           <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-200 md:text-base">
             Follow one fixed cluster view as the coordinator tracks proposal flow, quorum formation, Byzantine interference, and the final decision of each node.
           </p>

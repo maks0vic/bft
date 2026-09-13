@@ -14,7 +14,7 @@ import (
 )
 
 func main() {
-	addr := flag.String("addr", "localhost:9000", "coordinator listen address")
+	addr := flag.String("addr", "127.0.0.1:9000", "coordinator listen address")
 	nodeBasePort := flag.Int("node-base-port", 8001, "starting port for generated node processes")
 	flag.Parse()
 
